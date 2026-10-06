@@ -25,3 +25,4 @@ Para convertir o leer: `mne-bids` (`pip install mne-bids`).
 | Dataset | Origen | Fecha de descarga | Licencia |
 |---------|--------|-------------------|----------|
 |         |        |                   |          |
+| GRABMyo v1.1.0 (sesión 1, participante 1; gestos 11-14 y 17) | https://doi.org/10.13026/89dm-f662 | 2026-10-06 | CC BY 4.0 |

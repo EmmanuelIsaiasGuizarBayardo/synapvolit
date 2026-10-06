@@ -12,9 +12,9 @@ con ellos. La narrativa describe aportaciones, no cargos.
 
 ### Emmanuel Isaías Guízar Bayardo
 
-*[COMPLETAR: roles CRediT, por ejemplo Conceptualization · Software · Writing – original draft]*
+*Conceptualization · Methodology · Software · Validation · Data curation · Project administration · Writing – original draft*
 
-[COMPLETAR: qué hizo, en una o dos frases.]
+Concibió y diseñó la arquitectura de SynapVolit: el protocolo binario entre el microcontrolador y Python, la cadena de procesamiento y la frontera con las aplicaciones de DUNNE. Desarrolló y validó el motor, y preparó la conversión de los datos públicos con que se simula.
 
 <!-- Por cada persona más: una sección "### Nombres Apellidos", sus roles en
      cursiva y su narrativa. Si además es autora, va en CITATION.cff con el mismo
@@ -30,7 +30,7 @@ con ellos. La narrativa describe aportaciones, no cargos.
      solo en 'references' de CITATION.cff; las bibliotecas y sus versiones ya
      están en pyproject.toml y uv.lock. -->
 
-Ninguno por ahora.
+Los datos de simulación provienen de GRABMyo v1.1.0 (Jiang, Pradhan y He, 2024; PhysioNet; CC BY 4.0; https://doi.org/10.13026/89dm-f662). El conversor selecciona cuatro canales del antebrazo, resta la media de cada segmento, une los ensayos con transiciones de 20 ms y remuestrea de 2048 a 2000 Hz; los originales no se redistribuyen.
 
 ---
 

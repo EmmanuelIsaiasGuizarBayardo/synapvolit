@@ -23,3 +23,34 @@ authors:
 #     authors:
 #       - family-names: "Apellido"
 #         given-names: "Nombre"
+
+references:
+  - type: dataset
+    title: "Gesture Recognition and Biometrics ElectroMyogram (GRABMyo)"
+    authors:
+      - family-names: Jiang
+        given-names: Ning
+      - family-names: Pradhan
+        given-names: Ashirbad
+      - family-names: He
+        given-names: Jiayuan
+    version: "1.1.0"
+    doi: 10.13026/89dm-f662
+    date-released: 2024-06-07
+    publisher:
+      name: PhysioNet
+    license: CC-BY-4.0
+  - type: article
+    title: "Multi-day dataset of forearm and wrist electromyogram for hand gesture recognition and biometrics"
+    authors:
+      - family-names: Pradhan
+        given-names: Ashirbad
+      - family-names: He
+        given-names: Jiayuan
+      - family-names: Jiang
+        given-names: Ning
+    journal: Scientific Data
+    volume: 9
+    start: 733
+    year: 2022
+    doi: 10.1038/s41597-022-01836-y
