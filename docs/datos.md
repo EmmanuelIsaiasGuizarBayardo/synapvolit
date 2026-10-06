@@ -61,3 +61,34 @@ El estándar prefiere convertir los datasets a BIDS al ingresar. GRABMyo se cons
 formato WFDB original porque el simulador solo necesita un derivado de cuatro canales, y el
 formato original se lee con una biblioteca mantenida (`wfdb`). Si el motor llega a entrenar
 modelos con varios datasets, se convertirá a BIDS en ese momento.
+
+## Validación entre sesiones
+
+Descarga varias personas y dos sesiones (cada persona y sesión ocupa ~45 MB):
+
+```powershell
+$ProgressPreference = "SilentlyContinue"
+$base = "https://physionet.org/files/grabmyo/1.1.0"
+$raiz = "data\raw\grabmyo\1.1.0"
+Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile "$raiz\SHA256SUMS.txt" -UseBasicParsing
+foreach ($s in 1, 2) {
+    foreach ($p in 1..5) {
+        $dir = "$raiz\Session$s\session${s}_participant$p"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        foreach ($g in 11, 12, 13, 14, 17) {
+            foreach ($t in 1..7) {
+                foreach ($ext in "hea", "dat") {
+                    $archivo = "session${s}_participant${p}_gesture${g}_trial$t.$ext"
+                    if (-not (Test-Path "$dir\$archivo")) {
+                        Invoke-WebRequest "$base/Session$s/session${s}_participant$p/$archivo" -OutFile "$dir\$archivo" -UseBasicParsing
+                    }
+                }
+            }
+        }
+    }
+}
+uv run python -m synapvolit.validacion --participantes 1 2 3 4 5 --sesiones 1 2
+```
+
+La validación compara primero cada archivo con `SHA256SUMS.txt` y se detiene si alguno no coincide.
+Los escenarios que reporta están descritos en `src/synapvolit/validacion.py`.

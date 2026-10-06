@@ -192,6 +192,12 @@ class Sesion:
         if cmd == "calibrar":
             if self.cal.fase not in TERMINALES or self._calculo is not None:
                 return self._responder(cola, m_error("ya hay una calibración en curso"))
+            if (
+                self.bita.registro is None
+            ):  # la calibración pertenece a un paciente: sin sesión no hay a quién
+                return self._responder(
+                    cola, m_error("inicia la sesión del paciente (Acceso) antes de calibrar")
+                )
             verificar = None
             if orden["modo"] == "verificar":
                 if self.perfil is None:

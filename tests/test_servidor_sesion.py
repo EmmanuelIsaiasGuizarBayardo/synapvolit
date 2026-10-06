@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import tempfile
+from pathlib import Path
 
 import numpy as np
 from websockets.asyncio.client import connect
@@ -28,7 +30,7 @@ def _senal():
 
 
 async def _con_sesion(prueba):
-    sesion = Sesion(FuenteSimulada(_senal()))
+    sesion = Sesion(FuenteSimulada(_senal()), raiz_datos=Path(tempfile.mkdtemp()))
     listo = asyncio.Event()
     tarea = asyncio.create_task(sesion.servir("127.0.0.1", 0, listo))
     await listo.wait()
@@ -43,6 +45,11 @@ def test_calibracion_por_websocket_sin_detener_los_niveles():
         async with connect(url) as ws:
             tipos = [json.loads(await ws.recv())["tipo"] for _ in range(3)]
             assert tipos == ["hola", "estado", "calibracion"]
+            await ws.send(json.dumps({"cmd": "calibrar"}))  # sin sesión de paciente: se rechaza
+            while (m := json.loads(await ws.recv()))["tipo"] != "error":
+                pass
+            assert "antes de calibrar" in m["detalle"]
+            await ws.send(json.dumps({"cmd": "sesion", "accion": "iniciar", "codigo": "PRUEBA01"}))
             await ws.send(
                 json.dumps(
                     {

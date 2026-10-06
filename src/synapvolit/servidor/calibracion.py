@@ -23,7 +23,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..clasificacion import ModeloLDA, entrenar, evaluar
+from ..clasificacion import ModeloLDA, entrenar
+from ..clasificacion.verificacion import EXACTITUD_MINIMA, verificar_perfil
 from ..procesamiento import MALO, MOVIMIENTOS, SIN_EVALUAR, MatrizCalibracion, calibrar
 
 INACTIVA, CONTACTO, REPOSO, PREPARAR, CONTRACCION, DESCANSO = (
@@ -40,7 +41,6 @@ TERMINALES = (INACTIVA, LISTA, ERROR, CANCELADA)
 # reposo inicial), pero el clasificador los usa como más ejemplos de reposo, repartidos en toda
 # la sesión, para que la validación por repeticiones tenga reposo en cada partición.
 DESCANSO_ETQ = 5
-VERIF_EXACTITUD = 0.8
 VERBO = {
     "extension": "extiende la muñeca",
     "flexion": "dobla la muñeca hacia abajo",
@@ -320,43 +320,29 @@ class MaquinaCalibracion:
         return m, modelo, None, avisos
 
     def _comparar(self, avisos: list[str]) -> tuple:
-        """Verificación: ¿el perfil guardado sigue describiendo la señal de hoy?
-
-        Dos criterios, porque fallan por razones distintas:
-        * exactitud del LDA guardado sobre los datos de hoy (≥ 80%): si cambió la colocación de los
-          electrodos, el patrón entre canales cambia y el modelo deja de acertar;
-        * razón entre la referencia de hoy y la guardada en cada canal agonista (0.5 a 2): una piel
-          más seca o un electrodo más lejos cambian la amplitud y desajustan la intensidad.
-        """
+        """Verificación: ¿el perfil guardado describe la señal de hoy? (``verificar_perfil``)."""
         guardada, modelo = self._verificar
         n = self._n
-        try:
-            nueva = calibrar(self._env[:n], self._val[:n], self._etq[:n])
-        except ValueError:  # ningún canal sube en su movimiento: casi seguro, electrodos movidos
-            nueva = None
         etq = np.where(self._rv[:n], self._etq[:n], -1).astype(np.int8)
-        exactitud = evaluar(modelo, self._ras[:n], etq, self.tasa) if self._con_rasgos else 0.0
-        if nueva is None:
-            razon = np.zeros(len(guardada.reposo_uv))
-        else:
-            razon = nueva.referencia_uv / guardada.referencia_uv
-        fuera = [
-            MOVIMIENTOS[m] for m, c in enumerate(guardada.agonista) if not 0.5 <= razon[c] <= 2.0
-        ]
-        ok = exactitud >= VERIF_EXACTITUD and not fuera
-        self.verificacion = {
-            "ok": ok,
-            "exactitud": round(exactitud, 3),
-            "razon_amplitud": [round(float(r), 2) for r in razon],
-        }
-        if ok:
+        v = verificar_perfil(
+            guardada,
+            modelo,
+            self._env[:n],
+            self._val[:n],
+            self._etq[:n],
+            self._ras[:n],
+            etq,
+            self.tasa,
+        )
+        self.verificacion = {k: v[k] for k in ("ok", "exactitud", "razon_amplitud")}
+        if v["ok"]:
             return guardada, modelo, None, avisos
         motivos = (
-            [f"exactitud {exactitud:.0%} (mínimo {VERIF_EXACTITUD:.0%})"]
-            if exactitud < VERIF_EXACTITUD
+            [f"exactitud {v['exactitud']:.0%} (mínimo {EXACTITUD_MINIMA:.0%})"]
+            if v["exactitud"] < EXACTITUD_MINIMA
             else []
         )
-        motivos += [f"amplitud distinta en {', '.join(fuera)}"] if fuera else []
+        motivos += [f"amplitud distinta en {', '.join(v['fuera'])}"] if v["fuera"] else []
         texto = f"El perfil no pasó la verificación ({'; '.join(motivos)})"
         return None, None, texto + ": haz la calibración completa", avisos
 

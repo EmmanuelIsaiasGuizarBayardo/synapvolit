@@ -135,6 +135,50 @@ def _unir(trozos: list[np.ndarray], m: int) -> np.ndarray:
     return np.concatenate(salida)
 
 
+def leer_sesion(
+    raiz: Path, sesion: int, participante: int, ensayos: range = range(1, 8)
+) -> tuple[dict, float]:
+    """Segmentos de los cinco gestos usados, por ensayo, y la frecuencia de muestreo original."""
+    seg: dict[int, list[np.ndarray]] = {g: [] for g in (*GESTOS, REPOSO)}
+    fs = None
+    for g in seg:
+        for t in ensayos:
+            ruta = ruta_registro(raiz, sesion, participante, g, t)
+            if not ruta.with_suffix(".hea").exists():
+                raise FileNotFoundError(
+                    f"Falta {ruta}.hea: revisa la descarga en data/raw/ (docs/datos.md)"
+                )
+            x, fs = leer_registro(ruta)
+            seg[g].append(x)
+    return seg, fs
+
+
+def construir_flujo(
+    seg: dict,
+    fs: float,
+    canales: list[int],
+    ensayos: list[int] | range,
+    fs_salida: float = 2000.0,
+    reposo_s: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Flujo de los ensayos pedidos (índices desde 0) con sus etiquetas, a ``fs_salida``."""
+    m = round(0.020 * fs)
+    trozos, etiquetas = [], []
+    for i in ensayos:
+        for g, clase in GESTOS.items():
+            rep = seg[REPOSO][i][: round(reposo_s * fs), canales]
+            mov = seg[g][i][:, canales]
+            trozos += [rep - rep.mean(axis=0), mov - mov.mean(axis=0)]
+            etiquetas += [np.zeros(len(rep), np.int8), np.full(len(mov), clase, np.int8)]
+    x = _unir(trozos, m)
+    # cada transición toma la etiqueta del segmento que entra: m muestras menos al final de cada uno
+    y = np.concatenate([e[:-m] for e in etiquetas[:-1]] + [etiquetas[-1]])
+    r = Fraction(fs_salida / fs).limit_denominator(1000)
+    x = resample_poly(x, r.numerator, r.denominator, axis=0).astype(np.float32)
+    idx = np.minimum((np.arange(len(x)) * fs / fs_salida).astype(np.int64), len(y) - 1)
+    return x, y[idx]
+
+
 def convertir(
     raiz: Path,
     destino: Path,
@@ -147,35 +191,11 @@ def convertir(
     reposo_s: float = 2.0,
 ) -> Path:
     """Convierte un participante y una sesión; devuelve la ruta del CSV escrito."""
-    seg: dict[int, list[np.ndarray]] = {g: [] for g in (*GESTOS, REPOSO)}
-    fs = None
-    for g in seg:
-        for t in ensayos:
-            ruta = ruta_registro(raiz, sesion, participante, g, t)
-            if not ruta.with_suffix(".hea").exists():
-                raise FileNotFoundError(
-                    f"Falta {ruta}.hea: revisa la descarga en data/raw/ (docs/datos.md)"
-                )
-            x, fs = leer_registro(ruta)
-            seg[g].append(x)
+    seg, fs = leer_sesion(raiz, sesion, participante, ensayos)
     informe = None
     if canales is None:
         canales, informe = elegir_canales(seg, fs)
-    m = round(0.020 * fs)
-    trozos, etiquetas = [], []
-    for i in range(len(ensayos)):
-        for g, clase in GESTOS.items():
-            rep = seg[REPOSO][i][: round(reposo_s * fs), canales]
-            mov = seg[g][i][:, canales]
-            trozos += [rep - rep.mean(axis=0), mov - mov.mean(axis=0)]
-            etiquetas += [np.zeros(len(rep), np.int8), np.full(len(mov), clase, np.int8)]
-    x = _unir(trozos, m)
-    # cada transición toma la etiqueta del segmento que entra: m muestras menos al final de cada uno
-    y = np.concatenate([e[:-m] for e in etiquetas[:-1]] + [etiquetas[-1]])
-    r = Fraction(fs_salida / fs).limit_denominator(1000)
-    x = resample_poly(x, r.numerator, r.denominator, axis=0).astype(np.float32)
-    idx = np.minimum((np.arange(len(x)) * fs / fs_salida).astype(np.int64), len(y) - 1)
-    y = y[idx]
+    x, y = construir_flujo(seg, fs, canales, range(len(ensayos)), fs_salida, reposo_s)
     destino.mkdir(parents=True, exist_ok=True)
     csv = destino / f"s{sesion}_p{participante:02d}.csv"
     tabla = pd.DataFrame(x, columns=[f"c{i}" for i in range(4)])
