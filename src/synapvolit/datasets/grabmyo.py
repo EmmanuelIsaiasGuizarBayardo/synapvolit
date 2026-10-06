@@ -60,33 +60,66 @@ def leer_registro(ruta: Path) -> tuple[np.ndarray, float]:
     return x - x.mean(axis=0), float(rec.fs)
 
 
-def elegir_canales(segmentos: dict[int, list[np.ndarray]]) -> tuple[list[int], dict]:
-    """Un canal por movimiento: el que más se activa en él y menos en los otros tres.
+def _rasgos(segmentos: dict[int, list[np.ndarray]], ventana: int):
+    """log-RMS por ventana no traslapada, con su clase y su ensayo (para validar sin fuga)."""
+    xs, ys, grupos = [], [], []
+    for g, segs in segmentos.items():
+        clase = 0 if g == REPOSO else GESTOS[g]
+        for t, s in enumerate(segs):
+            nv = len(s) // ventana
+            v = s[: nv * ventana].reshape(nv, ventana, -1)
+            xs.append(np.log(np.sqrt(np.mean(v**2, axis=1)) + 1e-9))
+            ys.append(np.full(nv, clase))
+            grupos.append(np.full(nv, t))
+    return np.vstack(xs), np.concatenate(ys), np.concatenate(grupos)
 
-    La activación de cada canal es su RMS en el movimiento dividido entre su RMS en reposo; la
-    especificidad divide esa activación entre la media de las de los otros movimientos. Se
-    asigna de forma voraz, primero la pareja canal-movimiento más específica.
+
+def elegir_canales(segmentos: dict[int, list[np.ndarray]], fs: float) -> tuple[list[int], dict]:
+    """Los cuatro canales que mejor separan las cinco clases, y qué movimiento representa cada uno.
+
+    1. Selección hacia adelante: se agrega, uno a uno, el canal que más sube la exactitud de un
+       LDA sobre log-RMS en ventanas de 150 ms. La validación agrupa por ensayo (GroupKFold): las
+       ventanas de un mismo ensayo nunca están a la vez en entrenamiento y en evaluación.
+    2. Asignación: cada canal elegido se asigna a un movimiento con el algoritmo húngaro,
+       maximizando su activación relativa (RMS en el movimiento entre el máximo de ese canal en
+       los cuatro movimientos). Es una asignación óptima global, no voraz.
     """
-    rms = {
-        g: np.mean([np.sqrt(np.mean(s**2, axis=0)) for s in segs], axis=0)
-        for g, segs in segmentos.items()
-    }
-    act = {g: rms[g] / rms[REPOSO] for g in GESTOS}
-    esp = {g: act[g] / np.mean([act[h] for h in GESTOS if h != g], axis=0) for g in GESTOS}
-    asignado: dict[int, int] = {}
-    libres = set(range(CANALES_ANTEBRAZO))
-    while len(asignado) < len(GESTOS):
-        g, c = max(
-            ((g, c) for g in GESTOS if g not in asignado for c in libres),
-            key=lambda gc: esp[gc[0]][gc[1]],
-        )
-        asignado[g] = c
-        libres.discard(c)
-    canales = [asignado[g] for g in sorted(GESTOS, key=GESTOS.get)]
-    informe = {
-        RANURAS[i]: {"canal": f"F{c + 1}", "especificidad": round(float(esp[g][c]), 2)}
-        for i, (g, c) in enumerate((g, asignado[g]) for g in sorted(GESTOS, key=GESTOS.get))
-    }
+    from scipy.optimize import linear_sum_assignment
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+    from sklearn.model_selection import GroupKFold, cross_val_score
+
+    x, y, grupos = _rasgos(segmentos, round(0.150 * fs))
+    cv = GroupKFold(n_splits=min(5, len(np.unique(grupos))))
+    elegidos: list[int] = []
+    exactitud = 0.0
+    while len(elegidos) < len(GESTOS):
+        puntajes = {
+            c: cross_val_score(
+                LinearDiscriminantAnalysis(), x[:, [*elegidos, c]], y, groups=grupos, cv=cv
+            ).mean()
+            for c in range(CANALES_ANTEBRAZO)
+            if c not in elegidos
+        }
+        mejor = max(puntajes, key=puntajes.get)
+        elegidos.append(mejor)
+        exactitud = puntajes[mejor]
+    orden = sorted(GESTOS, key=GESTOS.get)  # extensión, flexión, pronación, supinación
+
+    def rms(segs: list[np.ndarray]) -> np.ndarray:
+        return np.mean([np.sqrt(np.mean(s[:, elegidos] ** 2, axis=0)) for s in segs], axis=0)
+
+    reposo = rms(segmentos[REPOSO])
+    act = np.array([rms(segmentos[g]) / reposo for g in orden])  # (movimiento, canal elegido)
+    rel = act / act.max(axis=0)
+    _, col = linear_sum_assignment(-rel)
+    canales = [elegidos[col[i]] for i in range(len(orden))]
+    informe = {"exactitud_lda_5_clases": round(float(exactitud), 3)}
+    for i, ranura in enumerate(RANURAS):
+        informe[ranura] = {
+            "canal": f"F{canales[i] + 1}",
+            "activacion_relativa": round(float(rel[i, col[i]]), 2),
+            "activacion_sobre_reposo": round(float(act[i, col[i]]), 2),
+        }
     return canales, informe
 
 
@@ -127,7 +160,7 @@ def convertir(
             seg[g].append(x)
     informe = None
     if canales is None:
-        canales, informe = elegir_canales(seg)
+        canales, informe = elegir_canales(seg, fs)
     m = round(0.020 * fs)
     trozos, etiquetas = [], []
     for i in range(len(ensayos)):
@@ -201,8 +234,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     meta = json.loads(csv.with_suffix(".json").read_text(encoding="utf-8"))
     print(f"Escrito {csv} ({meta['fs']:g} Hz)")
-    for ranura, info in meta["seleccion"].items() if isinstance(meta["seleccion"], dict) else []:
-        print(f"  {ranura:<11} ← {info['canal']:<4} especificidad {info['especificidad']}")
+    sel = meta["seleccion"]
+    if isinstance(sel, dict):
+        exac = sel["exactitud_lda_5_clases"]
+        print(f"  exactitud LDA con 4 canales (5 clases, validada por ensayo): {exac:.0%}")
+        for ranura in RANURAS:
+            i = sel[ranura]
+            rel, rep = i["activacion_relativa"], i["activacion_sobre_reposo"]
+            txt = f"activación relativa {rel:.2f}, {rep:.1f}× el reposo"
+            print(f"  {ranura:<11} <- {i['canal']:<4} {txt}")
     return 0
 
 

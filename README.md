@@ -55,6 +55,9 @@ basta con volver a agregar los archivos.
 
 El código se distribuye bajo la licencia MIT (`LICENSE`).
 
+## Estados de la señal
+
+Cada canal se evalúa cada 10 ms como bueno, dudoso o malo (sin contacto, señal plana, recorte o red eléctrica), con histéresis de 250 ms para empeorar y 500 ms para mejorar. Nada que dependa de la señal se usa con contacto malo. Umbrales, justificación y costo medido: `docs/procesamiento.md`.
 ## Datos de personas
 
 <!-- Declaración obligatoria: qué se capta, de quién, dónde vive y cuánto dura.
