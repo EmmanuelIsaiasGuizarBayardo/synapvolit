@@ -1,0 +1,33 @@
+# Normalizacion de finales de linea. Elimina las advertencias "LF will be
+# replaced by CRLF" de Git en Windows y garantiza que el repositorio guarde LF.
+* text=auto eol=lf
+
+# PowerShell se consume en Windows.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binarios: nunca normalizar ni intentar diff.
+*.edf binary
+*.bdf binary
+*.gdf binary
+*.eeg binary
+*.vhdr binary
+*.vmrk binary
+*.fdt binary
+*.fif binary
+*.cnt binary
+*.mat binary
+*.set binary
+*.pt binary
+*.pth binary
+*.ckpt binary
+*.onnx binary
+*.safetensors binary
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.wav binary
+
+# Libretas: texto, pero sin intentar fusionar automaticamente.
+*.ipynb text eol=lf merge=binary

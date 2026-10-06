@@ -1,0 +1,48 @@
+# ── Entornos y cache ─────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.env
+
+# ── Datos ────────────────────────────────────────────────────────────────────
+# Estas reglas aplican aunque el proyecto no tenga data/ ni results/: las
+# protecciones son incondicionales; el andamiaje, condicional.
+data/**
+!data/raw/
+!data/processed/
+!data/**/.gitkeep
+!data/raw/README.md
+
+results/**
+!results/.gitkeep
+
+# ── Formatos de senal: nunca a un repositorio, en ningun lugar ───────────────
+*.edf
+*.bdf
+*.gdf
+*.vhdr
+*.vmrk
+*.eeg
+*.set
+*.fdt
+*.fif
+*.cnt
+*.xdf
+*.mat
+
+# ── Pesos de modelos ─────────────────────────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+# NOTA: los medios (*.mp4, *.wav, imagenes) NO se ignoran globalmente. En un
+# proyecto didactico son contenido versionado y licenciado; las grabaciones de
+# personas viven en data/, que ya esta excluido.
+
+# ── Instrucciones personales para asistentes de IA ───────────────────────────
+CLAUDE.local.md

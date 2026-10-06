@@ -1,0 +1,18 @@
+# Gestionado por Copier: no editar a mano. Registra los rasgos del proyecto.
+_commit: v0.8.1
+_src_path: gh:EmmanuelIsaiasGuizarBayardo/plantilla-proyecto
+autor_apellidos: Guízar Bayardo
+autor_nombres: Emmanuel Isaías
+contenido_didactico: false
+datos_de_personas: true
+descripcion: Motor de adquisición, procesamiento y decodificación de sEMG para aplicaciones
+    de DUNNE.
+entrada_propia: true
+investigacion: true
+nombre_proyecto: SynapVolit
+operacion_en_vivo: true
+organizacion_github: EmmanuelIsaiasGuizarBayardo
+proyecto_dunne: true
+python_version: '3.12'
+senal_externa: true
+usa_gpu: false

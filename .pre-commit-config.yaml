@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.23
+    hooks:
+      # Mantiene uv.lock sincronizado con pyproject.toml.
+      - id: uv-lock
+
+  - repo: local
+    hooks:
+      # Sustituye al hook uv-export: este si repone el --extra-index-url de
+      # PyTorch, que uv export omite para indices marcados explicit.
+      - id: export-requirements
+        name: exportar requirements.txt
+        entry: uv run python tools/export_requirements.py --hook
+        language: system
+        files: ^(uv\.lock|pyproject\.toml)$
+        pass_filenames: false

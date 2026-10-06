@@ -1,0 +1,23 @@
+# Cada etiqueta publicada debe coincidir con la version que declara el paquete.
+# tools/publicar.py lo garantiza; este workflow marca en rojo una etiqueta hecha
+# a mano sin subir la version.
+name: etiqueta
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: La etiqueta coincide con la version del paquete
+        run: |
+          esperada="v$(uv version --short)"
+          echo "etiqueta ${GITHUB_REF_NAME}, paquete ${esperada}"
+          test "${GITHUB_REF_NAME}" = "${esperada}"
