@@ -14,7 +14,7 @@ import numpy as np
 
 from ..procesamiento import MOVIMIENTOS, NOMBRES
 from ..registro import CODIGO
-from .calibracion import TERMINALES, MaquinaCalibracion, Protocolo
+from .calibracion import TERMINALES, VERIFICACION, MaquinaCalibracion, Protocolo
 
 VERSION = 2
 LIMITES = {  # parámetro: (mínimo, máximo)
@@ -64,7 +64,14 @@ def leer_orden(texto: str | bytes) -> dict:
         ):
             raise ErrorOrden(f'"clase" debe ser un entero de 0 a {len(MOVIMIENTOS)}')
         return {"cmd": cmd, "clase": clase}
+    if cmd == "abrir_carpeta":
+        return {"cmd": cmd}
     if cmd == "calibrar":
+        modo = m.get("modo", "completa")
+        if modo not in ("completa", "verificar"):
+            raise ErrorOrden('"modo" debe ser completa o verificar')
+        if modo == "verificar":
+            return {"cmd": cmd, "modo": modo, "protocolo": VERIFICACION}
         params = {}
         for nombre, (lo, hi) in LIMITES.items():
             if nombre not in m:
@@ -73,7 +80,7 @@ def leer_orden(texto: str | bytes) -> dict:
             if not isinstance(v, int | float) or isinstance(v, bool) or not lo <= v <= hi:
                 raise ErrorOrden(f'"{nombre}" debe estar entre {lo} y {hi}')
             params[nombre] = int(v) if nombre == "repeticiones" else float(v)
-        return {"cmd": cmd, "protocolo": Protocolo(**params)}
+        return {"cmd": cmd, "modo": modo, "protocolo": Protocolo(**params)}
     raise ErrorOrden(f'orden desconocida: "{cmd}"')
 
 
@@ -227,6 +234,8 @@ def m_resultado(c: MaquinaCalibracion) -> str:
             "mensaje": c.mensaje,
             "reposo_uv": None if m is None else [round(float(v), 1) for v in m.reposo_uv],
             "referencia_uv": None if m is None else [round(float(v), 1) for v in m.referencia_uv],
+            "modo": c.modo,
+            "verificacion": c.verificacion,
             "advertencias": list(c.advertencias),
             "exactitud": None
             if m is None or c.modelo is None or c.modelo.exactitud is None
@@ -275,6 +284,22 @@ def m_osc(dt_ms: float, mn: np.ndarray, mx: np.ndarray) -> str:
 
 def m_sesion(codigo: str | None, final: bool, resumen: dict) -> str:
     return _json({"tipo": "sesion_resumen", "codigo": codigo, "final": final, **resumen})
+
+
+def m_perfil(codigo: str, estado: str, info: dict | None = None, motivo: str | None = None) -> str:
+    """Estado del perfil de calibración del paciente: cargado, guardado, verificado, no_existe o
+    incompatible."""
+    info = info or {}
+    return _json(
+        {
+            "tipo": "perfil",
+            "codigo": codigo,
+            "estado": estado,
+            "fecha": info.get("fecha"),
+            "exactitud": info.get("exactitud"),
+            "motivo": motivo,
+        }
+    )
 
 
 def m_error(detalle: str) -> str:

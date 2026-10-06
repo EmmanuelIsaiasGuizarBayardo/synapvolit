@@ -20,8 +20,9 @@ que un sitio web abierto en el mismo navegador no pueda leer la sEMG. El juego s
 | `calibracion` | Al cambiar de fase y cada 100 ms mientras dura | `fase`, `paso` (1-6), `movimiento`, `repeticion`, `de`, `progreso`, `restante_s`, `mensaje`, `duracion_s`, `activa` |
 | `calibracion_resultado` | Al terminar, fallar o cancelar | `ok`, `mensaje`, `reposo_uv`, `referencia_uv`, `advertencias`, `exactitud` (validada por repeticiones; `null` con una sola) |
 | `decodificador` | 8 Hz, solo calibrado, con señal fresca y fuera de la calibración | `clase` (0 reposo, 1 extensión, 2 flexión, 3 pronación, 4 supinación), `confianza`, `intensidad`, `coactivacion` (`null` si no es separable), `probabilidades`, `t` |
-| `osc` | ~20 Hz, solo a quien lo pidió | `dt_ms`, `min` y `max` por canal y cubeta (µV; `null` = hueco) |
+| `osc` | 10 Hz, solo a quien lo pidió (cubetas de 10 ms) | `dt_ms`, `min` y `max` por canal y cubeta (µV; `null` = hueco) |
 | `sesion_resumen` | Al pedirlo y al exportar | Minutos efectivos, adherencia, conteos, `fatiga`, `final`, `archivos` |
+| `perfil` | Al iniciar sesión y al guardar o verificar | `estado` (`cargado`, `no_existe`, `incompatible`, `guardado`, `verificado`), `fecha`, `exactitud`, `motivo` |
 | `error` | Orden inválida | `detalle` |
 
 Si no hay decisión válida, simplemente no se envía `decodificador`: el juego vuelve al teclado y lo anuncia. Cualquier otro valor ausente o inválido llega como `null`: una envolvente sin suficientes muestras
@@ -31,7 +32,8 @@ válidas, una activación sin calibración o cualquier dato con más de 250 ms s
 
 | `cmd` | Parámetros | Efecto |
 |---|---|---|
-| `calibrar` | Opcionales: `repeticiones` (1-10), `reposo_s`, `preparar_s`, `contraccion_s`, `descanso_s` | Inicia la calibración guiada |
+| `calibrar` | `modo`: `completa` (opcionales: `repeticiones` 1-10, `reposo_s`, `preparar_s`, `contraccion_s`, `descanso_s`) o `verificar` (~23 s, requiere perfil guardado) | Inicia la calibración guiada o verifica el perfil del paciente |
+| `abrir_carpeta` | | Abre en el explorador la carpeta del paciente actual (solo esa) |
 | `cancelar` | | La detiene |
 | `simular` | `clase` (0-4) | Solo con fuente simulada: el paciente simulado hace ese movimiento (el juego lo envía con las flechas) |
 | `ping` | | Responde `{"tipo":"pong"}` |

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..clasificacion import ModeloLDA, entrenar
+from ..clasificacion import ModeloLDA, entrenar, evaluar
 from ..procesamiento import MALO, MOVIMIENTOS, SIN_EVALUAR, MatrizCalibracion, calibrar
 
 INACTIVA, CONTACTO, REPOSO, PREPARAR, CONTRACCION, DESCANSO = (
@@ -40,6 +40,7 @@ TERMINALES = (INACTIVA, LISTA, ERROR, CANCELADA)
 # reposo inicial), pero el clasificador los usa como más ejemplos de reposo, repartidos en toda
 # la sesión, para que la validación por repeticiones tenga reposo en cada partición.
 DESCANSO_ETQ = 5
+VERIF_EXACTITUD = 0.8
 VERBO = {
     "extension": "extiende la muñeca",
     "flexion": "dobla la muñeca hacia abajo",
@@ -69,6 +70,12 @@ class Protocolo:
         return self.contacto_s + self.reposo_s + por_rep * self.repeticiones * len(self.movimientos)
 
 
+# Verificación de un perfil guardado: una repetición corta de cada movimiento (~23 s)
+VERIFICACION = Protocolo(
+    repeticiones=1, reposo_s=4.0, preparar_s=1.5, contraccion_s=2.0, descanso_s=1.0
+)
+
+
 class MaquinaCalibracion:
     """Calibración guiada; el bucle de la sesión llama a ``avanzar`` en cada paso."""
 
@@ -79,6 +86,9 @@ class MaquinaCalibracion:
         self.matriz: MatrizCalibracion | None = None
         self.modelo: ModeloLDA | None = None
         self.calculo_externo = False  # True: la sesión corre ``calcular`` fuera del bucle
+        self.modo = "completa"
+        self.verificacion: dict | None = None
+        self._verificar: tuple | None = None
         self.mensaje = "Lista para calibrar"
         self.advertencias: list[str] = []
         self.i_mov = self.rep = 0
@@ -90,9 +100,15 @@ class MaquinaCalibracion:
         self._env = self._val = self._etq = self._ras = self._rv = None
 
     # ---- órdenes ----
-    def iniciar(self, protocolo: Protocolo, t: float) -> None:
-        """Empieza (o reinicia) una calibración; reserva el registro una sola vez."""
+    def iniciar(self, protocolo: Protocolo, t: float, verificar: tuple | None = None) -> None:
+        """Empieza una calibración completa o, con ``verificar=(matriz, modelo)``, una verificación.
+
+        La verificación sigue el mismo guion corto y, en vez de entrenar, mide qué tan bien el
+        perfil guardado explica la señal de hoy (ver ``calcular``).
+        """
         self.p, self.advertencias, self.i_mov, self.rep = protocolo, [], 0, 0
+        self._verificar, self.verificacion = verificar, None
+        self.modo = "verificar" if verificar is not None else "completa"
         cap = (
             int(
                 (
@@ -116,6 +132,16 @@ class MaquinaCalibracion:
         self._n = 0
         self._t_contacto = None
         self._ir(CONTACTO, t, protocolo.espera_contacto_s, "Revisando los sensores")
+
+    def reiniciar(self) -> None:
+        """Vuelve a inactiva sin resultado (al cambiar de paciente no sobrevive nada anterior)."""
+        self.fase, self.mensaje, self.matriz, self.modelo = (
+            INACTIVA,
+            "Lista para calibrar",
+            None,
+            None,
+        )
+        self.verificacion, self.advertencias, self._dur = None, [], 0.0
 
     def cancelar(self, t: float) -> None:
         if self.fase not in TERMINALES:
@@ -270,6 +296,8 @@ class MaquinaCalibracion:
         (matriz, modelo, error, advertencias)
         """
         n, avisos = self._n, []
+        if self._verificar is not None:
+            return self._comparar(avisos)
         try:
             m = calibrar(self._env[:n], self._val[:n], self._etq[:n])
         except ValueError as e:
@@ -291,6 +319,47 @@ class MaquinaCalibracion:
                 return None, None, f"No se pudo entrenar el clasificador: {e}", avisos
         return m, modelo, None, avisos
 
+    def _comparar(self, avisos: list[str]) -> tuple:
+        """Verificación: ¿el perfil guardado sigue describiendo la señal de hoy?
+
+        Dos criterios, porque fallan por razones distintas:
+        * exactitud del LDA guardado sobre los datos de hoy (≥ 80%): si cambió la colocación de los
+          electrodos, el patrón entre canales cambia y el modelo deja de acertar;
+        * razón entre la referencia de hoy y la guardada en cada canal agonista (0.5 a 2): una piel
+          más seca o un electrodo más lejos cambian la amplitud y desajustan la intensidad.
+        """
+        guardada, modelo = self._verificar
+        n = self._n
+        try:
+            nueva = calibrar(self._env[:n], self._val[:n], self._etq[:n])
+        except ValueError:  # ningún canal sube en su movimiento: casi seguro, electrodos movidos
+            nueva = None
+        etq = np.where(self._rv[:n], self._etq[:n], -1).astype(np.int8)
+        exactitud = evaluar(modelo, self._ras[:n], etq, self.tasa) if self._con_rasgos else 0.0
+        if nueva is None:
+            razon = np.zeros(len(guardada.reposo_uv))
+        else:
+            razon = nueva.referencia_uv / guardada.referencia_uv
+        fuera = [
+            MOVIMIENTOS[m] for m, c in enumerate(guardada.agonista) if not 0.5 <= razon[c] <= 2.0
+        ]
+        ok = exactitud >= VERIF_EXACTITUD and not fuera
+        self.verificacion = {
+            "ok": ok,
+            "exactitud": round(exactitud, 3),
+            "razon_amplitud": [round(float(r), 2) for r in razon],
+        }
+        if ok:
+            return guardada, modelo, None, avisos
+        motivos = (
+            [f"exactitud {exactitud:.0%} (mínimo {VERIF_EXACTITUD:.0%})"]
+            if exactitud < VERIF_EXACTITUD
+            else []
+        )
+        motivos += [f"amplitud distinta en {', '.join(fuera)}"] if fuera else []
+        texto = f"El perfil no pasó la verificación ({'; '.join(motivos)})"
+        return None, None, texto + ": haz la calibración completa", avisos
+
     def terminar(self, t: float, resultado: tuple) -> bool:
         """Aplica el resultado de ``calcular`` (si la calibración no se canceló mientras tanto)."""
         if self.fase != CALCULANDO:
@@ -300,7 +369,10 @@ class MaquinaCalibracion:
         if error:
             return self._fallar(t, error)
         self.matriz, self.modelo = m, modelo
-        return self._ir(LISTA, t, 0.0, "¡Listo! Sensor calibrado")
+        texto = (
+            "¡Listo! Perfil verificado" if self.modo == "verificar" else "¡Listo! Sensor calibrado"
+        )
+        return self._ir(LISTA, t, 0.0, texto)
 
     def _fallar(self, t: float, motivo: str) -> bool:
         return self._ir(ERROR, t, 0.0, motivo)

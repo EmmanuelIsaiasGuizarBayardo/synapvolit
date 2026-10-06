@@ -32,3 +32,14 @@ registro nunca frena la señal.
 
 Los CSV están **seudonimizados**: sin nombres ni horas, pero el código vincula los datos con la
 persona en la clínica.
+
+## Perfil de calibración
+
+Tras una calibración completa con sesión abierta, el motor guarda `perfil.json` en la carpeta del
+paciente: reposo y referencias por canal y movimiento, pesos del LDA, exactitud, fecha y la
+configuración de rasgos. Es JSON legible (nunca `pickle`) y se escribe de forma atómica.
+
+En la sesión siguiente se carga, pero no se usa hasta pasar una **verificación de ~23 s** (una
+repetición de cada movimiento): el LDA guardado debe acertar al menos el 80% con la señal de hoy y
+la referencia de cada canal agonista debe quedar entre 0.5 y 2 veces la guardada. Si no pasa, se
+pide la calibración completa. Un perfil creado con otra configuración de rasgos se rechaza.

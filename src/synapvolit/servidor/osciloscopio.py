@@ -1,4 +1,4 @@
-"""Diezmado para el osciloscopio de la interfaz: mínimo y máximo por cubeta de 5 ms.
+"""Diezmado para el osciloscopio de la interfaz: mínimo y máximo por cubeta de 10 ms.
 
 Mandar 2000 muestras por segundo y canal a la pantalla sería inútil (tiene unos cientos de
 píxeles) y caro. Promediar borraría los picos. Lo que hace un osciloscopio digital es guardar el
@@ -16,7 +16,7 @@ class Osciloscopio:
     """Acumula mín/máx por cubeta del bloque filtrado que entrega el procesador."""
 
     def __init__(
-        self, canales: int, fs: float, cubeta_s: float = 0.005, capacidad: int = 64
+        self, canales: int, fs: float, cubeta_s: float = 0.010, capacidad: int = 64
     ) -> None:
         self.m = max(1, round(cubeta_s * fs))
         self.dt_ms = 1000.0 * self.m / fs

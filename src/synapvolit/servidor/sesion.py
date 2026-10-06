@@ -19,8 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import os
+import subprocess
+import sys
 import time
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -30,7 +34,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..clasificacion import Decisor
 from ..procesamiento import ConfigProcesamiento, Procesador
-from ..registro import frecuencia_mediana, raiz_por_defecto
+from ..registro import cargar_perfil, frecuencia_mediana, guardar_perfil, raiz_por_defecto
 from ..transporte import BufferCircular, Decodificador
 from .bitacora import Bitacora
 from .calibracion import CALCULANDO, LISTA, TERMINALES, MaquinaCalibracion
@@ -44,10 +48,22 @@ from .contrato import (
     m_hola,
     m_niveles,
     m_osc,
+    m_perfil,
     m_resultado,
     m_sesion,
 )
 from .osciloscopio import Osciloscopio
+
+
+def abrir_en_explorador(carpeta: Path) -> None:
+    """Abre la carpeta del paciente en el explorador del sistema (solo esa, nunca otra ruta)."""
+    if sys.platform == "win32":
+        os.startfile(carpeta)
+    else:
+        subprocess.run(
+            ["open" if sys.platform == "darwin" else "xdg-open", str(carpeta)], check=False
+        )
+
 
 HOSTS_LOCALES = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -80,12 +96,18 @@ class Sesion:
         cfg: ConfigProcesamiento | None = None,
         reloj: Callable[[], float] = time.monotonic,
         raiz_datos: Path | None = None,
+        abridor: Callable[[Path], object] | None = None,
     ) -> None:
         self.fuente, self.reloj = fuente, reloj
         self.bita = Bitacora(raiz_datos or raiz_por_defecto(), reloj)
         self.osc: Osciloscopio | None = None
         self.suscritos: set[asyncio.Queue] = set()
         self._t_osc = -1e9
+        self.perfil: tuple | None = None  # (matriz, modelo, info) del paciente de la sesión
+        self._guardando: asyncio.Future | None = None
+        self._guardando_codigo: str | None = None
+        self._ultimo_codigo: str | None = None
+        self.abridor = abridor or abrir_en_explorador
         self.cfg = cfg or ConfigProcesamiento(fs=fuente.fs or 2000.0)
         self.buf = BufferCircular(self.cfg.canales, int(4 * self.cfg.fs))
         self.dec = Decodificador(self.buf, fs=self.cfg.fs)
@@ -139,9 +161,23 @@ class Sesion:
                     self.decisor = Decisor(self.cal.modelo, self.cal.matriz)
                 if self.bita.registro is not None:
                     ex = self.cal.modelo.exactitud if self.cal.modelo else None
-                    self.bita.registro.anotar("calibracion", exactitud=ex)
+                    self.bita.registro.anotar(
+                        "calibracion",
+                        modo=self.cal.modo,
+                        exactitud=ex,
+                        verificacion=self.cal.verificacion,
+                    )
+                    self._tras_calibrar()
             if self.cal.fase in TERMINALES:
                 self._difundir(m_resultado(self.cal))
+        if self._guardando is not None and self._guardando.done():
+            fut, self._guardando = self._guardando, None
+            try:
+                fut.result()
+                info = self.perfil[2] if self.perfil else None
+                self._difundir(m_perfil(self._guardando_codigo, "guardado", info))
+            except OSError as e:
+                self._difundir(m_error(f"no se pudo guardar el perfil: {e}"))
         fin = self.bita.tick(t, bool(self.clientes))
         if fin is not None:
             self._difundir(m_sesion(fin[0], True, fin[1]))
@@ -156,9 +192,15 @@ class Sesion:
         if cmd == "calibrar":
             if self.cal.fase not in TERMINALES or self._calculo is not None:
                 return self._responder(cola, m_error("ya hay una calibración en curso"))
+            verificar = None
+            if orden["modo"] == "verificar":
+                if self.perfil is None:
+                    return self._responder(cola, m_error("no hay un perfil guardado que verificar"))
+                verificar = self.perfil[:2]
             self.clase_libre = 0
             self.decisor = None
-            self.cal.iniciar(orden["protocolo"], t)
+            self.proc.matriz = None
+            self.cal.iniciar(orden["protocolo"], t, verificar)
             self._t_cal = -1e9
         elif cmd == "cancelar":
             self.cal.cancelar(t)
@@ -180,6 +222,14 @@ class Sesion:
             self._observar()
         elif cmd == "sesion":
             self._orden_sesion(cola, orden)
+        elif cmd == "abrir_carpeta":
+            codigo = self.bita.codigo or self._ultimo_codigo
+            carpeta = None if codigo is None else self.bita.raiz / codigo
+            if carpeta is None or not carpeta.exists():
+                return self._responder(
+                    cola, m_error("todavía no hay datos guardados de este paciente")
+                )
+            asyncio.get_running_loop().run_in_executor(None, self.abridor, carpeta)
         elif cmd == "evento":
             if self.bita.registro is None:
                 return self._responder(cola, m_error("no hay una sesión iniciada"))
@@ -191,6 +241,8 @@ class Sesion:
             if b.registro is not None:
                 b.terminar("nueva_sesion")
             m = self.cal.modelo if self.proc.matriz is not None else None
+            self._cargar_perfil(orden["codigo"])
+            self._ultimo_codigo = orden["codigo"]
             b.iniciar(
                 orden["codigo"],
                 orden["minutos_prescritos"],
@@ -208,6 +260,41 @@ class Sesion:
         else:
             b.terminar("cliente")
             self._estado_previo = None
+
+    def _tras_calibrar(self) -> None:
+        """Calibración completa: guarda el perfil (en un hilo). Verificación: solo lo anuncia."""
+        codigo = self.bita.codigo
+        if self.cal.modo == "verificar":
+            self._difundir(m_perfil(codigo, "verificado", self.perfil[2]))
+            return
+        if self.cal.modelo is None:
+            return
+        info = {"fecha": f"{date.today():%Y-%m-%d}", "exactitud": self.cal.modelo.exactitud}
+        self.perfil = (self.cal.matriz, self.cal.modelo, info)
+        self._guardando = asyncio.get_running_loop().run_in_executor(
+            None,
+            guardar_perfil,
+            self.bita.raiz / codigo,
+            self.cal.matriz,
+            self.cal.modelo,
+            self.cfg,
+        )
+        self._guardando_codigo = codigo
+
+    def _cargar_perfil(self, codigo: str) -> None:
+        """Al iniciar la sesión de un paciente: nada de la calibración anterior sobrevive."""
+        self.decisor, self.proc.matriz, self.perfil = None, None, None
+        if self.cal.fase in TERMINALES:
+            self.cal.reiniciar()
+            self._t_cal = -1e9  # la interfaz ve de inmediato que no hay calibración
+        try:
+            p = cargar_perfil(self.bita.raiz / codigo, self.cfg)
+        except ValueError as e:
+            return self._difundir(m_perfil(codigo, "incompatible", motivo=str(e)))
+        if p is None:
+            return self._difundir(m_perfil(codigo, "no_existe"))
+        self.perfil = p
+        self._difundir(m_perfil(codigo, "cargado", p[2]))
 
     def _observar(self) -> None:
         """Conecta el osciloscopio al procesador solo mientras alguien lo mira."""
@@ -258,8 +345,8 @@ class Sesion:
             if d is not None:
                 self._difundir(m_decodificador(int(t * 1000), *d, self.decisor.probabilidades))
             self.bita.tick_decision(self.decisor if listo else None, d is not None)
-        # osciloscopio: solo a quien lo pidió, ~20 veces por segundo
-        if self.suscritos and self.osc is not None and self.osc.n and t - self._t_osc >= 0.05:
+        # osciloscopio: solo a quien lo pidió, 10 veces por segundo (la interfaz interpola)
+        if self.suscritos and self.osc is not None and self.osc.n and t - self._t_osc >= 0.1:
             self._t_osc = t
             msg = m_osc(self.osc.dt_ms, *self.osc.extraer())
             for cola in self.suscritos:

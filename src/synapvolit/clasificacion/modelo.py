@@ -60,6 +60,30 @@ def _grupos(etiquetas: np.ndarray, tasa: float, trozo_s: float = 1.0) -> np.ndar
     return grupos
 
 
+def preparar(
+    rasgos: np.ndarray, etiquetas: np.ndarray, tasa: float, quitar_inicio_s: float = 0.5
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Rasgos y clases utilizables: sin inicios de repetición, con el descanso como reposo."""
+    usar = etiquetas >= 0
+    quitar = round(quitar_inicio_s * tasa)
+    bordes = np.r_[0, np.flatnonzero(np.diff(etiquetas)) + 1, len(etiquetas)]
+    for i, f in zip(bordes[:-1], bordes[1:], strict=True):
+        if etiquetas[i] > 0:  # en repeticiones cortas se quita a lo más el 30% inicial
+            usar[i : i + min(quitar, int(0.3 * (f - i)))] = False
+    x = rasgos[usar].astype(np.float64)
+    y = np.where(etiquetas[usar] == DESCANSO, 0, etiquetas[usar])  # el descanso es reposo
+    return x, y, usar
+
+
+def evaluar(modelo: ModeloLDA, rasgos: np.ndarray, etiquetas: np.ndarray, tasa: float) -> float:
+    """Exactitud de un modelo ya entrenado sobre datos nuevos (la verificación de una sesión)."""
+    x, y, _ = preparar(rasgos, etiquetas, tasa)
+    if len(y) == 0:
+        return 0.0
+    pred = modelo.clases[np.argmax(x @ modelo.w.T + modelo.b, axis=1)]
+    return float(np.mean(pred == y))
+
+
 def entrenar(
     rasgos: np.ndarray, etiquetas: np.ndarray, tasa: float, *, quitar_inicio_s: float = 0.5
 ) -> ModeloLDA:
@@ -82,14 +106,7 @@ def entrenar(
     from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
     from sklearn.model_selection import StratifiedGroupKFold, cross_val_score
 
-    usar = etiquetas >= 0
-    quitar = round(quitar_inicio_s * tasa)
-    bordes = np.r_[0, np.flatnonzero(np.diff(etiquetas)) + 1, len(etiquetas)]
-    for i, f in zip(bordes[:-1], bordes[1:], strict=True):
-        if etiquetas[i] > 0:  # en repeticiones cortas se quita a lo más el 30% inicial
-            usar[i : i + min(quitar, int(0.3 * (f - i)))] = False
-    x = rasgos[usar].astype(np.float64)
-    y = np.where(etiquetas[usar] == DESCANSO, 0, etiquetas[usar])  # el descanso es reposo
+    x, y, usar = preparar(rasgos, etiquetas, tasa, quitar_inicio_s)
     faltan = [CLASES[c] for c in range(len(CLASES)) if not np.any(y == c)]
     if faltan:
         raise ValueError(f"no hay datos de {', '.join(faltan)} para entrenar")

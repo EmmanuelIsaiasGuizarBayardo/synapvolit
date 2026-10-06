@@ -83,7 +83,7 @@ def test_osciloscopio_solo_para_quien_lo_pide(tmp_path):
             return m, sesion.proc.observador
 
     m, observador = asyncio.run(_con_sesion(prueba, tmp_path))
-    assert len(m["min"]) == 4 and m["dt_ms"] == 5.0
+    assert len(m["min"]) == 4 and m["dt_ms"] == 10.0
     assert all(lo <= hi for lo, hi in zip(m["min"][0], m["max"][0], strict=True) if lo is not None)
     assert observador is None
 
@@ -96,3 +96,38 @@ def test_apagar_el_motor_exporta_la_sesion_abierta(tmp_path):
 
     asyncio.run(_con_sesion(prueba, tmp_path))
     assert (tmp_path / "ABC-1" / "resumen_sesiones.csv").exists()
+
+
+def test_perfil_al_iniciar_y_abrir_carpeta(tmp_path):
+    abiertas = []
+
+    async def prueba(sesion, url):
+        sesion.abridor = abiertas.append
+        async with connect(url) as ws:
+            await ws.send(json.dumps({"cmd": "abrir_carpeta"}))
+            assert "todavía no hay datos" in (await _esperar(ws, "error"))["detalle"]
+            await ws.send(json.dumps({"cmd": "sesion", "accion": "iniciar", "codigo": "NUEVO1"}))
+            perfil = await _esperar(ws, "perfil")
+            await ws.send(json.dumps({"cmd": "calibrar", "modo": "verificar"}))
+            error = await _esperar(ws, "error")
+            await asyncio.sleep(1.2)  # el registro ya se volcó: la carpeta existe
+            await ws.send(json.dumps({"cmd": "abrir_carpeta"}))
+            await asyncio.sleep(0.3)
+            return perfil, error
+
+    perfil, error = asyncio.run(_con_sesion(prueba, tmp_path))
+    assert perfil["estado"] == "no_existe" and "no hay un perfil" in error["detalle"]
+    assert abiertas == [tmp_path / "NUEVO1"]
+
+
+def test_cambiar_de_paciente_borra_la_calibracion_anterior(tmp_path):
+    async def prueba(sesion, url):
+        async with connect(url) as ws:
+            sesion.cal.fase = "lista"  # como si el paciente anterior hubiera calibrado
+            sesion.proc.matriz = object()
+            await ws.send(json.dumps({"cmd": "sesion", "accion": "iniciar", "codigo": "OTRO-2"}))
+            await _esperar(ws, "perfil")
+            await asyncio.sleep(0.1)
+            return sesion.cal.fase, sesion.proc.matriz, sesion.decisor
+
+    assert asyncio.run(_con_sesion(prueba, tmp_path)) == ("inactiva", None, None)
