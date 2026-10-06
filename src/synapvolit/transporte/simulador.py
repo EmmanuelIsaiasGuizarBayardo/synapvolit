@@ -91,6 +91,11 @@ class SimuladorESP32:
         self.fs, self.n, self.lsb_uv, self.esc = fs, por_trama, lsb_uv, escenario
         self.canales = self.cuentas.shape[1]
         self.tramas_ciclo, self.k = nfr, 0
+        self._ini, self._fin, self._j = (
+            0,
+            nfr,
+            0,
+        )  # tramo que se reproduce en bucle (por defecto, todo)
         self._emp = Empaquetador(self.canales, por_trama)
         self._rng = np.random.default_rng(escenario.semilla)
         self._hola_cada = max(1, round(hola_cada_s * fs / por_trama))
@@ -114,6 +119,15 @@ class SimuladorESP32:
     def tramas_por_segundo(self) -> float:
         return self.fs / self.n
 
+    def reproducir(self, ini: int, fin: int) -> None:
+        """Reproduce en bucle las tramas ``[ini, fin)`` a partir de la siguiente emisión.
+
+        La fuente guiada lo usa para que el "paciente simulado" haga el movimiento que se le pide.
+        """
+        if not 0 <= ini < fin <= self.tramas_ciclo:
+            raise ValueError(f"tramo fuera de la señal: [{ini}, {fin})")
+        self._ini, self._fin, self._j = ini, fin, ini
+
     def _en_ventana(self, t_s: float, cada: float, dur: float) -> bool:
         return cada > 0 and t_s >= cada and (t_s % cada) < dur
 
@@ -128,7 +142,8 @@ class SimuladorESP32:
             return  # enlace caído: el ESP32 sigue contando, pero nada llega
         if e.perdida_tramas and self._rng.random() < e.perdida_tramas:
             return
-        j = k % self.tramas_ciclo
+        j = self._j
+        self._j = self._j + 1 if self._j + 1 < self._fin else self._ini
         bloque = self.cuentas[j * self.n : (j + 1) * self.n]
         banderas = BIT_SATURACION if self._sat[j] else 0
         contacto = (
