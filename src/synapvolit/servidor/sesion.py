@@ -21,14 +21,18 @@ import asyncio
 import dataclasses
 import time
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import urlsplit
 
+import numpy as np
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 from ..clasificacion import Decisor
 from ..procesamiento import ConfigProcesamiento, Procesador
+from ..registro import frecuencia_mediana, raiz_por_defecto
 from ..transporte import BufferCircular, Decodificador
+from .bitacora import Bitacora
 from .calibracion import CALCULANDO, LISTA, TERMINALES, MaquinaCalibracion
 from .contrato import (
     ErrorOrden,
@@ -39,8 +43,11 @@ from .contrato import (
     m_estado,
     m_hola,
     m_niveles,
+    m_osc,
     m_resultado,
+    m_sesion,
 )
+from .osciloscopio import Osciloscopio
 
 HOSTS_LOCALES = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -72,8 +79,13 @@ class Sesion:
         *,
         cfg: ConfigProcesamiento | None = None,
         reloj: Callable[[], float] = time.monotonic,
+        raiz_datos: Path | None = None,
     ) -> None:
         self.fuente, self.reloj = fuente, reloj
+        self.bita = Bitacora(raiz_datos or raiz_por_defecto(), reloj)
+        self.osc: Osciloscopio | None = None
+        self.suscritos: set[asyncio.Queue] = set()
+        self._t_osc = -1e9
         self.cfg = cfg or ConfigProcesamiento(fs=fuente.fs or 2000.0)
         self.buf = BufferCircular(self.cfg.canales, int(4 * self.cfg.fs))
         self.dec = Decodificador(self.buf, fs=self.cfg.fs)
@@ -125,8 +137,14 @@ class Sesion:
                 p.matriz = self.cal.matriz
                 if self.cal.modelo is not None:
                     self.decisor = Decisor(self.cal.modelo, self.cal.matriz)
+                if self.bita.registro is not None:
+                    ex = self.cal.modelo.exactitud if self.cal.modelo else None
+                    self.bita.registro.anotar("calibracion", exactitud=ex)
             if self.cal.fase in TERMINALES:
                 self._difundir(m_resultado(self.cal))
+        fin = self.bita.tick(t, bool(self.clientes))
+        if fin is not None:
+            self._difundir(m_sesion(fin[0], True, fin[1]))
         # el paciente simulado hace lo que pide la calibración, o lo último que pidió la interfaz
         self.fuente.pedir(
             self.cal.objetivo if self.cal.fase not in TERMINALES else self.clase_libre
@@ -154,6 +172,70 @@ class Sesion:
             self.clase_libre = orden["clase"]
         elif cmd == "ping":
             self._responder(cola, '{"tipo":"pong"}')
+        elif cmd == "osciloscopio":
+            if orden["activo"] and cola is not None:
+                self.suscritos.add(cola)
+            else:
+                self.suscritos.discard(cola)
+            self._observar()
+        elif cmd == "sesion":
+            self._orden_sesion(cola, orden)
+        elif cmd == "evento":
+            if self.bita.registro is None:
+                return self._responder(cola, m_error("no hay una sesión iniciada"))
+            self.bita.evento(orden, self._mdf)
+
+    def _orden_sesion(self, cola: asyncio.Queue | None, orden: dict) -> None:
+        b, accion = self.bita, orden["accion"]
+        if accion == "iniciar":
+            if b.registro is not None:
+                b.terminar("nueva_sesion")
+            m = self.cal.modelo if self.proc.matriz is not None else None
+            b.iniciar(
+                orden["codigo"],
+                orden["minutos_prescritos"],
+                fuente=self.fuente.nombre,
+                fs=self.cfg.fs,
+                version_contrato=2,
+                calibrado=self.proc.matriz is not None,
+                exactitud=None if m is None else m.exactitud,
+            )
+            self._estado_previo = None  # anunciar la sesión en el siguiente estado
+        elif b.registro is None:
+            self._responder(cola, m_error("no hay una sesión iniciada"))
+        elif accion == "resumen":
+            self._responder(cola, m_sesion(b.codigo, False, b.resumen()))
+        else:
+            b.terminar("cliente")
+            self._estado_previo = None
+
+    def _observar(self) -> None:
+        """Conecta el osciloscopio al procesador solo mientras alguien lo mira."""
+        if self.suscritos and self.osc is None:
+            self.osc = Osciloscopio(self.cfg.canales, self.cfg.fs)
+        self.proc.observador = self.osc.agregar if self.suscritos and self.osc else None
+
+    def _mdf(self, movimiento: str, dur_s: float) -> float | None:
+        """MDF del agonista en el último segundo del ejercicio (o menos si fue más corto)."""
+        canales = {
+            "extension": [0],
+            "flexion": [1],
+            "pronacion": [2],
+            "supinacion": [3],
+            "cofre": [2, 3],
+        }.get(movimiento)
+        n = min(int(min(dur_s, 1.0) * self.cfg.fs), self.buf.capacidad)
+        if not canales or n < 1:
+            return None
+        datos, val = (
+            np.empty((n, self.cfg.canales), np.float32),
+            np.empty((n, self.cfg.canales), bool),
+        )
+        if self.buf.ultimas(n, datos, val, np.empty(n, np.int64)) < n or not val[:, canales].all():
+            return None
+        mdf = [frecuencia_mediana(datos[:, c].astype(np.float64), self.cfg.fs) for c in canales]
+        mdf = [v for v in mdf if v is not None]
+        return round(float(np.mean(mdf)), 1) if mdf else None
 
     def _publicar(self, t: float) -> None:
         p, ok = self.proc, self.fresca
@@ -169,16 +251,19 @@ class Sesion:
                 )
             )
         # decisiones: solo con señal fresca, decisor entrenado y fuera de la calibración
-        if (
-            self.decisor is not None
-            and ok
-            and self.cal.fase in TERMINALES
-            and t - self._t_dec >= self.DECISION_S
-        ):
+        if t - self._t_dec >= self.DECISION_S:
             self._t_dec = t
-            d = self.decisor.decision()
+            listo = self.decisor is not None and ok and self.cal.fase in TERMINALES
+            d = self.decisor.decision() if listo else None
             if d is not None:
                 self._difundir(m_decodificador(int(t * 1000), *d, self.decisor.probabilidades))
+            self.bita.tick_decision(self.decisor if listo else None, d is not None)
+        # osciloscopio: solo a quien lo pidió, ~20 veces por segundo
+        if self.suscritos and self.osc is not None and self.osc.n and t - self._t_osc >= 0.05:
+            self._t_osc = t
+            msg = m_osc(self.osc.dt_ms, *self.osc.extraer())
+            for cola in self.suscritos:
+                self._poner(cola, msg)
         estado = (ok, p.matriz is not None, tuple(int(c) for c in p.calidad), self.fuente.error)
         if estado != self._estado_previo or t - self._t_est >= self.ESTADO_S:
             self._t_est, self._estado_previo = t, estado
@@ -198,6 +283,7 @@ class Sesion:
             d.perdidas,
             d.crc_malos + d.cobs_malos + d.formato_malo,
             self.fuente.error,
+            self.bita.codigo,
         )
 
     def _rehacer(self, fs: float) -> None:
@@ -246,6 +332,8 @@ class Sesion:
         finally:
             emisor.cancel()
             self.clientes.pop(ws, None)
+            self.suscritos.discard(cola)
+            self._observar()
 
     @staticmethod
     async def _emitir(ws: ServerConnection, cola: asyncio.Queue) -> None:
@@ -268,4 +356,9 @@ class Sesion:
             self.puerto_real = servidor.sockets[0].getsockname()[1]
             if listo is not None:
                 listo.set()
-            await asyncio.gather(self.fuente.correr(self.dec.alimentar, self.reloj), self._bucle())
+            try:
+                await asyncio.gather(
+                    self.fuente.correr(self.dec.alimentar, self.reloj), self._bucle()
+                )
+            finally:  # al apagar el motor, la sesión abierta se cierra y se exporta
+                self.bita.terminar_ya("cierre_motor")

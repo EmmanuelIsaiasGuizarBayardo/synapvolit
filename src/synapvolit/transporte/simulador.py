@@ -102,6 +102,13 @@ class SimuladorESP32:
         self._t0 = t0_us
         self._bloque = np.empty((por_trama, self.canales), np.int16)
         self._mezcla = np.empty((por_trama, self.canales), np.float64)
+        self._viejo = np.empty((por_trama, self.canales), np.float64)
+        # fundido de 2 tramas (20 ms) al cambiar de tramo: sin él, el salto de un registro a otro
+        # aparece como un pico que el filtro convierte en un artefacto visible en el osciloscopio
+        self._fade_n = 2
+        rampa = (np.arange(self._fade_n * por_trama) + 1.0) / (self._fade_n * por_trama + 1.0)
+        self._fade_w = rampa.reshape(self._fade_n, por_trama, 1)
+        self._fade_k, self._jv = self._fade_n, 0
         self._fase = np.arange(por_trama, dtype=np.float64)
         self._sen = np.empty(por_trama, np.float64)
         self._hola = {
@@ -126,6 +133,8 @@ class SimuladorESP32:
         """
         if not 0 <= ini < fin <= self.tramas_ciclo:
             raise ValueError(f"tramo fuera de la señal: [{ini}, {fin})")
+        if self.k > 0:  # ya se estaba reproduciendo algo: se funde con lo nuevo
+            self._jv, self._fade_k = self._j, 0
         self._ini, self._fin, self._j = ini, fin, ini
 
     def _en_ventana(self, t_s: float, cada: float, dur: float) -> bool:
@@ -149,12 +158,21 @@ class SimuladorESP32:
         contacto = (
             self._en_ventana(t_s, e.contacto_cada_s, e.contacto_dur_s) and e.contacto_canal >= 0
         )
-        if e.red_uv or contacto:
+        fundir = self._fade_k < self._fade_n
+        if e.red_uv or contacto or fundir:
             # interferencia de red (60 Hz) con fase continua entre tramas
             np.add(self._fase, k * self.n, out=self._sen)
             np.multiply(self._sen, 2 * np.pi * 60.0 / self.fs, out=self._sen)
             np.sin(self._sen, out=self._sen)
             np.copyto(self._mezcla, bloque)
+            if fundir:
+                w = self._fade_w[self._fade_k]
+                np.copyto(self._viejo, self.cuentas[self._jv * self.n : (self._jv + 1) * self.n])
+                self._mezcla *= w
+                self._viejo *= 1.0 - w
+                self._mezcla += self._viejo
+                self._fade_k += 1
+                self._jv = self._jv + 1 if self._jv + 1 < self.tramas_ciclo else 0
             if e.red_uv:
                 self._mezcla += (e.red_uv / self.lsb_uv) * self._sen[:, None]
             if contacto:  # electrodo flotante: domina la red y el canal se marca sin contacto

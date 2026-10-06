@@ -64,11 +64,11 @@ Cada canal se evalúa cada 10 ms como bueno, dudoso o malo (sin contacto, señal
      Si el proyecto sí guarda datos, reemplaza el párrafo por qué se guarda,
      dónde, por cuánto tiempo y con qué consentimiento. -->
 
-**Señal de personas.** En operación, el motor recibe en tiempo real la sEMG de cuatro canales del antebrazo de quien usa el brazalete y, cuando exista, la orientación de su IMU. Esa señal se mantiene en memoria mientras dura la sesión y no se escribe a disco; ningún componente del motor la persiste todavía.
+**Señal de personas.** En operación, el motor recibe en tiempo real la sEMG de cuatro canales del antebrazo de quien usa el brazalete y, cuando exista, la orientación de su IMU. La señal cruda, la matriz de calibración y el clasificador viven solo en memoria: nunca se escriben a disco.
 
 **Datos públicos para simulación.** Para desarrollar y probar sin hardware se usa GRABMyo v1.1.0 (PhysioNet, CC BY 4.0): sEMG de antebrazo de 43 adultos sanos, identificados solo por número, recolectada con aprobación ética de la Universidad de Waterloo (ORE 31346). Los originales se descargan a data/raw/ y el derivado que reproduce el simulador, un CSV de cuatro canales por persona y sesión, se escribe en data/processed/. Git ignora ambas carpetas, de modo que este repositorio no contiene datos de personas. Los derivados se conservan mientras dure el desarrollo y se regeneran en cualquier momento desde los originales; la procedencia se registra en data/raw/README.md y en el JSON de cada derivado.
 
-Cuando el motor guarde perfiles de calibración o registros de sesión, esta declaración se actualizará en el mismo cambio que los introduzca.
+**Registro de sesiones.** Cuando la interfaz inicia una sesión con el código alfanumérico de un paciente, el motor guarda un registro de eventos (inicio y fin de cada ejercicio, resultado, tiempo de reacción, intensidad pico, co-contracción, frecuencia mediana y cambios de validez de la señal) y, al cerrar, dos CSV derivados. No contienen nombres ni sEMG cruda; el registro incluye la fecha y la hora de inicio, y los CSV solo la fecha. Están seudonimizados, no anonimizados: el código vincula los datos con la persona en la clínica. Se guardan en la computadora local, fuera del repositorio (por defecto `%LOCALAPPDATA%\SynapVolit\pacientes\<código>`), no se envían por red y no se borran solos: el equipo responsable decide cuándo eliminarlos. Por ahora solo se usan con datos de demostración o del propio equipo; registrar pacientes requiere el consentimiento del protocolo aprobado.
 
 **Marco legal.** Pendiente.
 

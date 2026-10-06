@@ -63,6 +63,8 @@ class Procesador:
         self._dy, self._y_prev = np.empty((b, nc)), np.zeros(nc)
         self.rasgos = np.zeros(2 * nc)  # [log1p(RMS) por canal, log1p(DASDV) por canal]
         self.rasgos_validos = False
+        # quien quiera ver cada bloque filtrado (el osciloscopio); None = sin costo
+        self.observador = None
 
     @property
     def calidad(self) -> np.ndarray:
@@ -91,6 +93,8 @@ class Procesador:
         np.greater(ti, self.cfg.asentamiento, out=veff)
         veff &= valido
         y_banda, y = self.filtro.aplicar(x)
+        if self.observador is not None:
+            self.observador(y, veff)
         env, envv = self._env[:k], self._envv[:k]
         self.rms.actualizar(y, veff, env, envv)
         dy, das, dasv = self._dy[:k], self._das[:k], self._dasv[:k]

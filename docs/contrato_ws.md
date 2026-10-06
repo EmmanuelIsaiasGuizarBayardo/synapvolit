@@ -20,6 +20,8 @@ que un sitio web abierto en el mismo navegador no pueda leer la sEMG. El juego s
 | `calibracion` | Al cambiar de fase y cada 100 ms mientras dura | `fase`, `paso` (1-6), `movimiento`, `repeticion`, `de`, `progreso`, `restante_s`, `mensaje`, `duracion_s`, `activa` |
 | `calibracion_resultado` | Al terminar, fallar o cancelar | `ok`, `mensaje`, `reposo_uv`, `referencia_uv`, `advertencias`, `exactitud` (validada por repeticiones; `null` con una sola) |
 | `decodificador` | 8 Hz, solo calibrado, con señal fresca y fuera de la calibración | `clase` (0 reposo, 1 extensión, 2 flexión, 3 pronación, 4 supinación), `confianza`, `intensidad`, `coactivacion` (`null` si no es separable), `probabilidades`, `t` |
+| `osc` | ~20 Hz, solo a quien lo pidió | `dt_ms`, `min` y `max` por canal y cubeta (µV; `null` = hueco) |
+| `sesion_resumen` | Al pedirlo y al exportar | Minutos efectivos, adherencia, conteos, `fatiga`, `final`, `archivos` |
 | `error` | Orden inválida | `detalle` |
 
 Si no hay decisión válida, simplemente no se envía `decodificador`: el juego vuelve al teclado y lo anuncia. Cualquier otro valor ausente o inválido llega como `null`: una envolvente sin suficientes muestras
@@ -33,6 +35,9 @@ válidas, una activación sin calibración o cualquier dato con más de 250 ms s
 | `cancelar` | | La detiene |
 | `simular` | `clase` (0-4) | Solo con fuente simulada: el paciente simulado hace ese movimiento (el juego lo envía con las flechas) |
 | `ping` | | Responde `{"tipo":"pong"}` |
+| `osciloscopio` | `activo` (true/false) | Suscribe al cliente a las cubetas mín/máx; sin suscriptores no cuesta nada |
+| `sesion` | `accion`: `iniciar` (con `codigo` y opcional `minutos_prescritos`), `resumen` o `terminar` | Abre, consulta o cierra y exporta el registro (ver `docs/registro.md`) |
+| `evento` | `tipo`: `ejercicio_inicio` (`id`, `movimiento`), `ejercicio_fin` (`id`, `resultado`, `rt_s`), `pausa`, `reanudar` | Se anota en el registro de la sesión |
 
 ## Por qué ninguna orden frena la señal
 

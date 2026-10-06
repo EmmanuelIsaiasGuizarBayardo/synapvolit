@@ -59,6 +59,14 @@ class Decisor:
             self._n_co[ok] += 1
         self._i = (i + 1) % self.n
 
+    def del_movimiento(self, m: int) -> tuple[float, float | None] | None:
+        """Intensidad y co-contracción medias del movimiento ``m`` (0-3), decida lo que decida."""
+        validos = int(self._ok.sum())
+        if validos < self.minimo:
+            return None
+        co = float(self._suma_co[m] / self._n_co[m]) if self._n_co[m] > 0 else None
+        return float(self._suma_int[m] / validos), co
+
     def decision(self) -> tuple[int, float, float, float | None] | None:
         """(clase, confianza, intensidad, co-contracción) o ``None`` si no hay señal suficiente."""
         validos = int(self._ok.sum())

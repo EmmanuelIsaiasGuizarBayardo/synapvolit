@@ -59,3 +59,18 @@ def test_desconexion_y_contacto_quedan_marcados():
     )  # dos desconexiones de 0.5 s (a los 2 y 4 s; a los 6 s ya terminó)
     sin_contacto = ~buf.valido[: buf.escritas, 1] & buf.valido[: buf.escritas, 0]
     assert sin_contacto.sum() == 2000  # 1 s a 2 kHz, a los 3 s
+
+
+def test_cambio_de_tramo_con_fundido_sin_escalon():
+    x = np.full((4000, 4), 1000.0, np.float32)
+    x[2000:] = -1000.0
+    sim = SimuladorESP32(x, 2000.0)
+    sim.reproducir(0, 100)  # primera mitad: +1000 µV
+    buf = BufferCircular(4, 4000)
+    dec = Decodificador(buf)
+    correr(sim, dec.alimentar, 0.03, tiempo_real=False)
+    sim.reproducir(100, 200)  # segunda mitad: -1000 µV
+    correr(sim, dec.alimentar, 0.05, tiempo_real=False)
+    salto = np.abs(np.diff(buf.datos[: buf.escritas, 0])).max()
+    assert salto < 60, f"escalón de {salto:.0f} µV al cambiar de tramo"  # sin fundido serían 2000
+    assert buf.datos[buf.escritas - 1, 0] == -1000.0

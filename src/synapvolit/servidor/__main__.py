@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baudios", type=int, default=921600)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--puerto", type=int, default=8765)
+    ap.add_argument("--datos", type=Path, default=None, help="carpeta de los registros de sesión")
     a = ap.parse_args(argv)
     if a.fuente == "serie":
         if not a.puerto_serie:
@@ -61,9 +62,10 @@ def main(argv: list[str] | None = None) -> int:
             f"AVISO: escuchando fuera de la máquina local ({a.host}): "
             "la señal de un paciente quedará expuesta en la red"
         )
-    sesion = Sesion(fuente)
+    sesion = Sesion(fuente, raiz_datos=a.datos)
     print(f"Motor en ws://{a.host}:{a.puerto} | {descripcion}")
     print(f"Abre el juego con ?motor=ws://{a.host}:{a.puerto}   (Ctrl+C para salir)")
+    print(f"Registros de sesión (seudonimizados, fuera del repositorio): {sesion.bita.raiz}")
     try:
         asyncio.run(sesion.servir(a.host, a.puerto))
     except KeyboardInterrupt:
