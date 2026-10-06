@@ -18,10 +18,11 @@ que un sitio web abierto en el mismo navegador no pueda leer la sEMG. El juego s
 | `estado` | Al cambiar y cada 1 s | `activa` (llegan datos frescos), `calibrado`, `calidad` (por canal: `bueno`, `dudoso`, `malo`, `sin evaluar`), `perdidas`, `descartadas`, `error_fuente` |
 | `niveles` | ~30 Hz | `t` (ms), `env_uv` y `act` por canal |
 | `calibracion` | Al cambiar de fase y cada 100 ms mientras dura | `fase`, `paso` (1-6), `movimiento`, `repeticion`, `de`, `progreso`, `restante_s`, `mensaje`, `duracion_s`, `activa` |
-| `calibracion_resultado` | Al terminar, fallar o cancelar | `ok`, `mensaje`, `reposo_uv`, `referencia_uv`, `advertencias` |
+| `calibracion_resultado` | Al terminar, fallar o cancelar | `ok`, `mensaje`, `reposo_uv`, `referencia_uv`, `advertencias`, `exactitud` (validada por repeticiones; `null` con una sola) |
+| `decodificador` | 8 Hz, solo calibrado, con señal fresca y fuera de la calibración | `clase` (0 reposo, 1 extensión, 2 flexión, 3 pronación, 4 supinación), `confianza`, `intensidad`, `coactivacion` (`null` si no es separable), `probabilidades`, `t` |
 | `error` | Orden inválida | `detalle` |
 
-Cualquier valor ausente o inválido llega como `null`: una envolvente sin suficientes muestras
+Si no hay decisión válida, simplemente no se envía `decodificador`: el juego vuelve al teclado y lo anuncia. Cualquier otro valor ausente o inválido llega como `null`: una envolvente sin suficientes muestras
 válidas, una activación sin calibración o cualquier dato con más de 250 ms sin señal nueva.
 
 ## De la interfaz al motor
@@ -30,7 +31,7 @@ válidas, una activación sin calibración o cualquier dato con más de 250 ms s
 |---|---|---|
 | `calibrar` | Opcionales: `repeticiones` (1-10), `reposo_s`, `preparar_s`, `contraccion_s`, `descanso_s` | Inicia la calibración guiada |
 | `cancelar` | | La detiene |
-| `simular` | `clase` (0-4) | Solo con fuente simulada: el paciente simulado hace ese movimiento |
+| `simular` | `clase` (0-4) | Solo con fuente simulada: el paciente simulado hace ese movimiento (el juego lo envía con las flechas) |
 | `ping` | | Responde `{"tipo":"pong"}` |
 
 ## Por qué ninguna orden frena la señal

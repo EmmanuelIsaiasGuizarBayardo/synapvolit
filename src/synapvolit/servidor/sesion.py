@@ -26,13 +26,15 @@ from urllib.parse import urlsplit
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from ..clasificacion import Decisor
 from ..procesamiento import ConfigProcesamiento, Procesador
 from ..transporte import BufferCircular, Decodificador
-from .calibracion import LISTA, TERMINALES, MaquinaCalibracion
+from .calibracion import CALCULANDO, LISTA, TERMINALES, MaquinaCalibracion
 from .contrato import (
     ErrorOrden,
     leer_orden,
     m_calibracion,
+    m_decodificador,
     m_error,
     m_estado,
     m_hola,
@@ -62,6 +64,7 @@ class Sesion:
     ESTADO_S = 1.0
     CALIBRACION_S = 0.1
     FRESCURA_S = 0.25
+    DECISION_S = 0.125  # 8 Hz, como el contrato original con el juego
 
     def __init__(
         self,
@@ -76,10 +79,14 @@ class Sesion:
         self.dec = Decodificador(self.buf, fs=self.cfg.fs)
         self.proc = Procesador(self.cfg)
         self.cal = MaquinaCalibracion(self.cfg.canales, 1 / self.PASO_S)
+        self.cal.calculo_externo = True
+        self._calculo: asyncio.Future | None = None
         self.clientes: dict[ServerConnection, asyncio.Queue] = {}
         self.ordenes: list[tuple[asyncio.Queue | None, dict]] = []
         self.fresca = False
         self.clase_libre = 0
+        self.decisor: Decisor | None = None
+        self._t_dec = -1e9
         self.puerto_real: int | None = None
         self._ult_proc, self._t_dato = 0, -1e9
         self._t_niv = self._t_est = self._t_cal = -1e9
@@ -93,16 +100,31 @@ class Sesion:
         for cola, orden in self.ordenes:
             self._aplicar(cola, orden, t)
         self.ordenes.clear()
-        self.proc.actualizar(self.buf)
-        if self.proc.procesadas != self._ult_proc:
-            self._ult_proc, self._t_dato = self.proc.procesadas, t
+        p = self.proc
+        p.actualizar(self.buf)
+        nuevas = p.procesadas != self._ult_proc
+        if nuevas:
+            self._ult_proc, self._t_dato = p.procesadas, t
         self.fresca = t - self._t_dato < self.FRESCURA_S
-        if self.cal.avanzar(
-            t, self.proc.env_uv, self.proc.env_valida, self.proc.calidad, self.fresca
-        ):
+        if (
+            nuevas and self.decisor is not None
+        ):  # una entrada al suavizado por paso con datos nuevos
+            self.decisor.actualizar(p.rasgos, p.env_uv, p.rasgos_validos)
+        cambio = self.cal.avanzar(
+            t, p.env_uv, p.env_valida, p.calidad, self.fresca, p.rasgos, p.rasgos_validos
+        )
+        # el entrenamiento (~0.1 s) corre en un hilo: el bucle sigue procesando y publicando
+        if self.cal.fase == CALCULANDO and self._calculo is None:
+            self._calculo = asyncio.get_running_loop().run_in_executor(None, self.cal.calcular)
+        if self._calculo is not None and self._calculo.done():
+            resultado, self._calculo = self._calculo.result(), None
+            cambio = self.cal.terminar(t, resultado) or cambio
+        if cambio:
             self._t_cal = -1e9  # publicar el cambio de fase de inmediato
             if self.cal.fase == LISTA:
-                self.proc.matriz = self.cal.matriz
+                p.matriz = self.cal.matriz
+                if self.cal.modelo is not None:
+                    self.decisor = Decisor(self.cal.modelo, self.cal.matriz)
             if self.cal.fase in TERMINALES:
                 self._difundir(m_resultado(self.cal))
         # el paciente simulado hace lo que pide la calibración, o lo último que pidió la interfaz
@@ -114,9 +136,10 @@ class Sesion:
     def _aplicar(self, cola: asyncio.Queue | None, orden: dict, t: float) -> None:
         cmd = orden["cmd"]
         if cmd == "calibrar":
-            if self.cal.fase not in TERMINALES:
+            if self.cal.fase not in TERMINALES or self._calculo is not None:
                 return self._responder(cola, m_error("ya hay una calibración en curso"))
             self.clase_libre = 0
+            self.decisor = None
             self.cal.iniciar(orden["protocolo"], t)
             self._t_cal = -1e9
         elif cmd == "cancelar":
@@ -145,6 +168,17 @@ class Sesion:
                     p.activacion_valida & ok,
                 )
             )
+        # decisiones: solo con señal fresca, decisor entrenado y fuera de la calibración
+        if (
+            self.decisor is not None
+            and ok
+            and self.cal.fase in TERMINALES
+            and t - self._t_dec >= self.DECISION_S
+        ):
+            self._t_dec = t
+            d = self.decisor.decision()
+            if d is not None:
+                self._difundir(m_decodificador(int(t * 1000), *d, self.decisor.probabilidades))
         estado = (ok, p.matriz is not None, tuple(int(c) for c in p.calidad), self.fuente.error)
         if estado != self._estado_previo or t - self._t_est >= self.ESTADO_S:
             self._t_est, self._estado_previo = t, estado

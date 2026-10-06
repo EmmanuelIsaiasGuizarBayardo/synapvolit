@@ -155,6 +155,31 @@ def m_resultado(c: MaquinaCalibracion) -> str:
             "reposo_uv": None if m is None else [round(float(v), 1) for v in m.reposo_uv],
             "referencia_uv": None if m is None else [round(float(v), 1) for v in m.referencia_uv],
             "advertencias": list(c.advertencias),
+            "exactitud": None
+            if m is None or c.modelo is None or c.modelo.exactitud is None
+            else round(c.modelo.exactitud, 3),
+        }
+    )
+
+
+def m_decodificador(
+    t_ms: int,
+    clase: int,
+    confianza: float,
+    intensidad: float,
+    coactivacion: float | None,
+    probabilidades: np.ndarray,
+) -> str:
+    """Decisión para el juego (mismo formato que ya consume ``WQ.feedDecoder``)."""
+    return _json(
+        {
+            "tipo": "decodificador",
+            "t": t_ms,
+            "clase": clase,
+            "confianza": round(confianza, 3),
+            "intensidad": round(intensidad, 3),
+            "coactivacion": None if coactivacion is None else round(coactivacion, 3),
+            "probabilidades": [round(float(p), 3) for p in probabilidades],
         }
     )
 

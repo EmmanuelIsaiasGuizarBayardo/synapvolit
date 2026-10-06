@@ -42,6 +42,9 @@ class Procesador:
         self.cfg, self.matriz = cfg, matriz
         self.filtro = FiltroEMG(cfg)
         self.rms = RMSDeslizante(nc, cfg.ventana, cfg.fraccion_valida)
+        # DASDV: RMS de la primera diferencia en la misma ventana. Junto con la RMS describe
+        # amplitud y contenido de frecuencia; son los rasgos del clasificador (2 por canal)
+        self.dasdv = RMSDeslizante(nc, cfg.ventana, cfg.fraccion_valida)
         self.cal = CalidadContacto(nc, cfg.fs, tope_uv, umbrales, cfg.red_hz)
         self.env_uv = np.zeros(nc, np.float32)
         self.env_valida = np.zeros(nc, bool)
@@ -56,6 +59,10 @@ class Procesador:
         self._gi, self._ti = np.empty(b, np.int64), np.empty((b, nc), np.int64)
         self._rampa = np.arange(b, dtype=np.int64)
         self._env, self._envv = np.empty((b, nc), np.float32), np.empty((b, nc), bool)
+        self._das, self._dasv = np.empty((b, nc), np.float32), np.empty((b, nc), bool)
+        self._dy, self._y_prev = np.empty((b, nc)), np.zeros(nc)
+        self.rasgos = np.zeros(2 * nc)  # [log1p(RMS) por canal, log1p(DASDV) por canal]
+        self.rasgos_validos = False
 
     @property
     def calidad(self) -> np.ndarray:
@@ -86,6 +93,11 @@ class Procesador:
         y_banda, y = self.filtro.aplicar(x)
         env, envv = self._env[:k], self._envv[:k]
         self.rms.actualizar(y, veff, env, envv)
+        dy, das, dasv = self._dy[:k], self._das[:k], self._dasv[:k]
+        np.subtract(y[0], self._y_prev, out=dy[0])
+        np.subtract(y[1:], y[:-1], out=dy[1:])
+        self._y_prev[:] = y[-1]
+        self.dasdv.actualizar(dy, veff, das, dasv)
         self.cal.actualizar(y_banda, x, valido, self.procesadas)
         self.env_uv[:] = env[-1]
         np.logical_and(envv[-1], self.cal.estado != MALO, out=self.env_valida)
@@ -93,6 +105,10 @@ class Procesador:
             self.matriz.normalizar(self.env_uv, self.activacion)
             self.activacion_valida[:] = self.env_valida
         self.procesadas += k
+        nc = self.cfg.canales
+        np.log1p(self.env_uv, out=self.rasgos[:nc])
+        np.log1p(das[-1], out=self.rasgos[nc:])
+        self.rasgos_validos = bool(self.env_valida.all() and dasv[-1].all())
         return env, envv
 
     def actualizar(self, buf: BufferCircular) -> int:
@@ -116,13 +132,19 @@ class Procesador:
 
     def procesar_todo(
         self, x: np.ndarray, valido: np.ndarray | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Procesa una señal completa con el código del tiempo real (para calibrar y probar)."""
-        n = len(x)
-        env, envv = (
-            np.empty((n, self.cfg.canales), np.float32),
-            np.empty((n, self.cfg.canales), bool),
-        )
+    ) -> tuple[np.ndarray, ...]:
+        """Procesa una señal completa con el código del tiempo real (para calibrar y probar).
+
+        Returns
+        -------
+        env, env_valida : np.ndarray
+            Envolvente RMS por muestra y canal.
+        rasgos, rasgos_validos : np.ndarray
+            ``(n, 2 × canales)`` y ``(n,)``: los rasgos del clasificador en cada muestra.
+        """
+        n, nc = len(x), self.cfg.canales
+        env, envv = np.empty((n, nc), np.float32), np.empty((n, nc), bool)
+        rasgos, rv = np.empty((n, 2 * nc), np.float32), np.empty(n, bool)
         b = self.cfg.bloque_max
         for i in range(0, n, b):
             j = min(i + b, n)
@@ -130,4 +152,7 @@ class Procesador:
             self._v[: j - i] = True if valido is None else valido[i:j]
             e, ev = self.procesar(self._x[: j - i], self._v[: j - i])
             env[i:j], envv[i:j] = e, ev
-        return env, envv
+            np.log1p(e, out=rasgos[i:j, :nc])
+            np.log1p(self._das[: j - i], out=rasgos[i:j, nc:])
+            rv[i:j] = ev.all(axis=1) & self._dasv[: j - i].all(axis=1)
+        return env, envv, rasgos, rv

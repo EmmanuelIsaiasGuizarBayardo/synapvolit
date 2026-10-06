@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..clasificacion import ModeloLDA, entrenar
 from ..procesamiento import MALO, MOVIMIENTOS, SIN_EVALUAR, MatrizCalibracion, calibrar
 
 INACTIVA, CONTACTO, REPOSO, PREPARAR, CONTRACCION, DESCANSO = (
@@ -35,6 +36,10 @@ INACTIVA, CONTACTO, REPOSO, PREPARAR, CONTRACCION, DESCANSO = (
 )
 CALCULANDO, LISTA, ERROR, CANCELADA = "calculando", "lista", "error", "cancelada"
 TERMINALES = (INACTIVA, LISTA, ERROR, CANCELADA)
+# Los descansos se registran con su propia etiqueta: la matriz los ignora (su reposo es solo el
+# reposo inicial), pero el clasificador los usa como más ejemplos de reposo, repartidos en toda
+# la sesión, para que la validación por repeticiones tenga reposo en cada partición.
+DESCANSO_ETQ = 5
 VERBO = {
     "extension": "extiende la muñeca",
     "flexion": "dobla la muñeca hacia abajo",
@@ -72,6 +77,8 @@ class MaquinaCalibracion:
         self.fase = INACTIVA
         self.p = Protocolo()
         self.matriz: MatrizCalibracion | None = None
+        self.modelo: ModeloLDA | None = None
+        self.calculo_externo = False  # True: la sesión corre ``calcular`` fuera del bucle
         self.mensaje = "Lista para calibrar"
         self.advertencias: list[str] = []
         self.i_mov = self.rep = 0
@@ -80,7 +87,7 @@ class MaquinaCalibracion:
         self._t_contacto: float | None = None
         self._t_sin_senal: float | None = None
         self._n = 0
-        self._env = self._val = self._etq = None
+        self._env = self._val = self._etq = self._ras = self._rv = None
 
     # ---- órdenes ----
     def iniciar(self, protocolo: Protocolo, t: float) -> None:
@@ -90,7 +97,9 @@ class MaquinaCalibracion:
             int(
                 (
                     protocolo.reposo_s
-                    + protocolo.contraccion_s * protocolo.repeticiones * len(protocolo.movimientos)
+                    + (protocolo.contraccion_s + protocolo.descanso_s)
+                    * protocolo.repeticiones
+                    * len(protocolo.movimientos)
                 )
                 * self.tasa
                 * 1.5
@@ -100,6 +109,10 @@ class MaquinaCalibracion:
         self._env = np.zeros((cap, self.canales), np.float32)
         self._val = np.zeros((cap, self.canales), bool)
         self._etq = np.zeros(cap, np.int8)
+        self._ras = np.zeros((cap, 2 * self.canales), np.float32)
+        self._rv = np.zeros(cap, bool)
+        self._con_rasgos = False
+        self.matriz = self.modelo = None
         self._n = 0
         self._t_contacto = None
         self._ir(CONTACTO, t, protocolo.espera_contacto_s, "Revisando los sensores")
@@ -140,11 +153,18 @@ class MaquinaCalibracion:
 
     # ---- bucle ----
     def avanzar(
-        self, t: float, env_uv: np.ndarray, valida: np.ndarray, calidad: np.ndarray, fresca: bool
+        self,
+        t: float,
+        env_uv: np.ndarray,
+        valida: np.ndarray,
+        calidad: np.ndarray,
+        fresca: bool,
+        rasgos: np.ndarray | None = None,
+        rasgos_validos: bool = False,
     ) -> bool:
         """Un paso del bucle. Devuelve ``True`` si cambió de fase (para avisar a la interfaz)."""
         f = self.fase
-        if f in TERMINALES:
+        if f in TERMINALES or f == CALCULANDO:
             return False
         if f == CONTACTO:
             bien = fresca and bool(np.all((calidad != MALO) & (calidad != SIN_EVALUAR)))
@@ -161,7 +181,7 @@ class MaquinaCalibracion:
                 que = f"canal de {', '.join(malos)}" if malos else "la señal"
                 return self._fallar(t, f"Sin contacto estable en {que}: revisa los electrodos")
             return False
-        if f in (REPOSO, CONTRACCION):
+        if f in (REPOSO, CONTRACCION, DESCANSO):
             if not fresca:
                 self._t_sin_senal = t if self._t_sin_senal is None else self._t_sin_senal
                 if t - self._t_sin_senal > self.p.max_sin_senal_s:
@@ -171,7 +191,11 @@ class MaquinaCalibracion:
             else:
                 self._t_sin_senal = None
                 self._registrar(
-                    env_uv, valida & (calidad != MALO), self.objetivo if f == CONTRACCION else 0
+                    env_uv,
+                    valida & (calidad != MALO),
+                    self.objetivo if f == CONTRACCION else DESCANSO_ETQ if f == DESCANSO else 0,
+                    rasgos,
+                    rasgos_validos,
                 )
         if t - self._t_fase < self._dur:
             return False
@@ -180,9 +204,19 @@ class MaquinaCalibracion:
         return self._siguiente(self._t_fase + self._dur)
 
     # ---- interno ----
-    def _registrar(self, env: np.ndarray, val: np.ndarray, etiqueta: int) -> None:
+    def _registrar(
+        self,
+        env: np.ndarray,
+        val: np.ndarray,
+        etiqueta: int,
+        rasgos: np.ndarray | None = None,
+        rasgos_validos: bool = False,
+    ) -> None:
         if self._n < len(self._etq):
             self._env[self._n], self._val[self._n], self._etq[self._n] = env, val, etiqueta
+            if rasgos is not None:
+                self._ras[self._n], self._rv[self._n] = rasgos, rasgos_validos
+                self._con_rasgos = True
             self._n += 1
 
     def _separar(
@@ -224,20 +258,48 @@ class MaquinaCalibracion:
 
     def _calcular(self, t: float) -> bool:
         self._ir(CALCULANDO, t, 0.0, "Calculando")
-        n = self._n
+        if self.calculo_externo:  # la sesión lo corre en un hilo y llama a ``terminar``
+            return True
+        return self.terminar(t, self.calcular())
+
+    def calcular(self) -> tuple[MatrizCalibracion | None, ModeloLDA | None, str | None, list[str]]:
+        """Parte pesada: matriz y LDA. Solo lee el registro, así que puede correr en otro hilo.
+
+        Returns
+        -------
+        (matriz, modelo, error, advertencias)
+        """
+        n, avisos = self._n, []
         try:
             m = calibrar(self._env[:n], self._val[:n], self._etq[:n])
         except ValueError as e:
-            return self._fallar(t, f"No se pudo calibrar: {e}")
+            return None, None, f"No se pudo calibrar: {e}", avisos
         ref = m.referencia_uv
         for i in self.p.movimientos:
             c = m.agonista[i]
             if ref[c] < self.p.relacion_minima * m.reposo_uv[c]:
-                self.advertencias.append(
+                avisos.append(
                     f"{MOVIMIENTOS[i]}: el canal apenas supera su reposo "
                     f"({ref[c] / m.reposo_uv[c]:.1f}×)"
                 )
-        self.matriz = m
+        modelo = None
+        if self._con_rasgos:  # el clasificador se entrena con los mismos datos y la misma cadena
+            etq = np.where(self._rv[:n], self._etq[:n], -1).astype(np.int8)
+            try:
+                modelo = entrenar(self._ras[:n], etq, self.tasa)
+            except ValueError as e:
+                return None, None, f"No se pudo entrenar el clasificador: {e}", avisos
+        return m, modelo, None, avisos
+
+    def terminar(self, t: float, resultado: tuple) -> bool:
+        """Aplica el resultado de ``calcular`` (si la calibración no se canceló mientras tanto)."""
+        if self.fase != CALCULANDO:
+            return False
+        m, modelo, error, avisos = resultado
+        self.advertencias = avisos
+        if error:
+            return self._fallar(t, error)
+        self.matriz, self.modelo = m, modelo
         return self._ir(LISTA, t, 0.0, "¡Listo! Sensor calibrado")
 
     def _fallar(self, t: float, motivo: str) -> bool:

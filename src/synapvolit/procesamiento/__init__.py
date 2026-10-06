@@ -28,5 +28,5 @@ __all__ = [
 
 def calibrar_senal(datos, etiquetas, cfg: ConfigProcesamiento) -> MatrizCalibracion:
     """Calibra con una señal etiquetada pasando por la misma cadena que el tiempo real."""
-    env, valida = Procesador(cfg).procesar_todo(datos)
+    env, valida, _, _ = Procesador(cfg).procesar_todo(datos)
     return calibrar(env, valida, etiquetas)

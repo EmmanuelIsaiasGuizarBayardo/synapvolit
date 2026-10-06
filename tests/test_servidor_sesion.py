@@ -50,7 +50,7 @@ def test_calibracion_por_websocket_sin_detener_los_niveles():
                         "repeticiones": 1,
                         "reposo_s": 0.5,
                         "preparar_s": 0.1,
-                        "contraccion_s": 0.6,
+                        "contraccion_s": 1.2,
                         "descanso_s": 0.1,
                     }
                 )
@@ -66,12 +66,24 @@ def test_calibracion_por_websocket_sin_detener_los_niveles():
             assert niveles / dur > 20  # ~30 por segundo aunque se esté calibrando
             ref = np.array(resultado["referencia_uv"])
             assert np.all(ref > 5 * np.array(resultado["reposo_uv"]))
+            assert resultado["exactitud"] is None  # una repetición: sin estimación honesta
             while (m := json.loads(await ws.recv()))["tipo"] != "niveles" or m["act"][0] is None:
                 pass
-            return m
+            # el paciente simulado hace flexión: el decodificador debe decidirlo
+            await ws.send(json.dumps({"cmd": "simular", "clase": 2}))
+            decisiones, t0 = [], asyncio.get_running_loop().time()
+            while asyncio.get_running_loop().time() - t0 < 2.0:
+                d = json.loads(await ws.recv())
+                if d["tipo"] == "decodificador":
+                    decisiones.append(d)
+            return m, decisiones
 
-    m = asyncio.run(_con_sesion(prueba))
+    m, decisiones = asyncio.run(_con_sesion(prueba))
     assert all(a is not None for a in m["act"])  # ya calibrado: hay activación normalizada
+    assert 12 <= len(decisiones) <= 20  # ~8 por segundo
+    finales = decisiones[-6:]
+    assert all(d["clase"] == 2 and d["confianza"] > 0.8 for d in finales), finales
+    assert all(0.5 < d["intensidad"] < 1.5 for d in finales)
 
 
 def test_origen_ajeno_se_rechaza():
