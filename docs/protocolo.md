@@ -60,3 +60,11 @@ numérico en una muestra inválida no significa nada.
 
 COBS se prueba con los vectores canónicos y contra la biblioteca independiente `cobs`; el CRC,
 contra su valor de verificación (`tests/test_transporte_*.py`).
+
+## Implementación del lado del microcontrolador
+
+`firmware/brazalete_esp32/` contiene el firmware de referencia para ESP32 (Arduino, C++). Su
+`protocolo.h` produce bytes idénticos a `Empaquetador`, verificado en `tests/test_firmware_protocolo.py`.
+
+El motor acepta además la orden `{"cmd":"apagar"}` por WebSocket, solo de programas locales (sin
+encabezado `Origin`): la usa el lanzador de WristQuest para cerrar en orden y exportar la sesión.

@@ -45,7 +45,7 @@ def leer_orden(texto: str | bytes) -> dict:
     if not isinstance(m, dict) or not isinstance(m.get("cmd"), str):
         raise ErrorOrden('falta "cmd"')
     cmd = m["cmd"]
-    if cmd in ("cancelar", "ping"):
+    if cmd in ("cancelar", "ping", "apagar"):
         return {"cmd": cmd}
     if cmd == "osciloscopio":
         if not isinstance(m.get("activo"), bool):

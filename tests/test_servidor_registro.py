@@ -131,3 +131,26 @@ def test_cambiar_de_paciente_borra_la_calibracion_anterior(tmp_path):
             return sesion.cal.fase, sesion.proc.matriz, sesion.decisor
 
     assert asyncio.run(_con_sesion(prueba, tmp_path)) == ("inactiva", None, None)
+
+
+def test_apagado_ordenado_solo_desde_un_programa_local(tmp_path):
+    async def prueba():
+        sesion = Sesion(FuenteSimulada(_senal()), raiz_datos=tmp_path)
+        listo = asyncio.Event()
+        tarea = asyncio.create_task(sesion.servir("127.0.0.1", 0, listo))
+        await listo.wait()
+        url = f"ws://127.0.0.1:{sesion.puerto_real}"
+        async with connect(url, origin="http://127.0.0.1:8000") as pagina:
+            await pagina.send(json.dumps({"cmd": "apagar"}))
+            assert "no puede apagar" in (await _esperar(pagina, "error"))["detalle"]
+        async with connect(url) as programa:
+            await programa.send(
+                json.dumps({"cmd": "sesion", "accion": "iniciar", "codigo": "APAG-1"})
+            )
+            await asyncio.sleep(0.2)
+            await programa.send(json.dumps({"cmd": "apagar"}))
+            async with asyncio.timeout(5):
+                await tarea  # servir termina solo, sin cancelarlo
+
+    asyncio.run(prueba())
+    assert (tmp_path / "APAG-1" / "resumen_sesiones.csv").exists()  # la sesión se exportó al apagar

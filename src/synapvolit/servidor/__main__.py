@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Registros de sesión (seudonimizados, fuera del repositorio): {sesion.bita.raiz}")
     try:
         asyncio.run(sesion.servir(a.host, a.puerto))
+        print("Motor detenido por el lanzador; la sesión abierta quedó exportada")
     except KeyboardInterrupt:
         print("Motor detenido")
     except OSError as e:

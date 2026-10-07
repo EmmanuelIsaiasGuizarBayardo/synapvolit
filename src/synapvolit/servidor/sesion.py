@@ -18,6 +18,7 @@ inyecta, así que se prueba con tiempos exactos.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import os
 import subprocess
@@ -103,6 +104,9 @@ class Sesion:
         self.osc: Osciloscopio | None = None
         self.suscritos: set[asyncio.Queue] = set()
         self._t_osc = -1e9
+        self._apagar = (
+            asyncio.Event()
+        )  # lo activa la orden "apagar" de un programa local (el lanzador)
         self.perfil: tuple | None = None  # (matriz, modelo, info) del paciente de la sesión
         self._guardando: asyncio.Future | None = None
         self._guardando_codigo: str | None = None
@@ -417,7 +421,16 @@ class Sesion:
         try:
             async for texto in ws:
                 try:
-                    self.ordenes.append((cola, leer_orden(texto)))
+                    orden = leer_orden(texto)
+                    if (
+                        orden["cmd"] == "apagar"
+                    ):  # solo un programa local (sin Origin), nunca una página
+                        if ws.request.headers.get("Origin") is None:
+                            self._apagar.set()
+                        else:
+                            self._poner(cola, m_error("una página web no puede apagar el motor"))
+                        continue
+                    self.ordenes.append((cola, orden))
                 except ErrorOrden as e:
                     self._poner(cola, m_error(str(e)))
         except ConnectionClosed:
@@ -445,13 +458,22 @@ class Sesion:
         self, host: str = "127.0.0.1", puerto: int = 8765, listo: asyncio.Event | None = None
     ) -> None:
         """Sirve hasta que se cancele la tarea."""
+        self._apagar = asyncio.Event()
         async with serve(self._atender, host, puerto, max_size=4096) as servidor:
             self.puerto_real = servidor.sockets[0].getsockname()[1]
             if listo is not None:
                 listo.set()
+            trabajo = asyncio.gather(
+                self.fuente.correr(self.dec.alimentar, self.reloj), self._bucle()
+            )
+            apagado = asyncio.ensure_future(self._apagar.wait())
             try:
-                await asyncio.gather(
-                    self.fuente.correr(self.dec.alimentar, self.reloj), self._bucle()
-                )
-            finally:  # al apagar el motor, la sesión abierta se cierra y se exporta
+                await asyncio.wait({trabajo, apagado}, return_when=asyncio.FIRST_COMPLETED)
+                if trabajo.done():
+                    trabajo.result()  # si la fuente o el bucle fallaron, que se vea el error
+            finally:  # apagado ordenado o Ctrl+C: la sesión abierta se cierra y se exporta
+                trabajo.cancel()
+                apagado.cancel()
+                with contextlib.suppress(asyncio.CancelledError):  # recoger las tareas canceladas
+                    await asyncio.gather(trabajo, apagado, return_exceptions=True)
                 self.bita.terminar_ya("cierre_motor")
