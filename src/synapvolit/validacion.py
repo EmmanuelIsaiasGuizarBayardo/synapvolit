@@ -12,11 +12,15 @@ con la cadena del tiempo real (decisiones a 8 Hz):
 Escenario          Entrena con                                   Evalúa con
 =================  ===========================================  ==========================
 intra S1           S1, ensayos 1-3                               S1, ensayos 4-7
-entre sesiones     S1, ensayos 1-7 (el perfil guardado)          S2, ensayos 2-7
+entre sesiones     S1, ensayos 1-7 (el perfil guardado)          S2, ensayos 4-7
 verificación       el perfil, con los criterios del motor        S2, ensayo 1 (~28 s)
-adaptado           perfil + el ensayo 1 de S2 como datos extra   S2, ensayos 2-7
+adaptado           perfil + el ensayo 1 de S2 como datos extra   S2, ensayos 4-7
 recalibrado        S2, ensayos 1-3                               S2, ensayos 4-7
 =================  ===========================================  ==========================
+
+Los tres escenarios del día 2 se evalúan con los MISMOS ensayos (4-7), así que sus diferencias son
+pareadas: miden el método, no la dificultad del ensayo. La verificación se reporta también al nivel
+de decisión (8 Hz, como el juego), además del nivel de muestra que usa el motor.
 
 La pregunta clínica: si la verificación rechaza las sesiones donde "entre sesiones" cae, es un
 buen filtro; si además "adaptado" recupera casi lo de "recalibrado", 30 s bastan cada día.
@@ -72,7 +76,9 @@ def validar_participante(raiz: Path, p: int, s1: int, s2: int, cfg: ConfigProces
     r["intra S1"] = evaluar_flujo(mod, m, *flujo(seg1, range(3, 7)), cfg)["exactitud"]
     # perfil guardado: toda la sesión 1
     matriz, modelo = entrenar_desde([rasgos_de(*flujo(seg1, range(7)), cfg)])
-    x2, y2 = flujo(seg2, range(1, 7))
+    x2, y2 = flujo(
+        seg2, range(3, 7)
+    )  # el mismo conjunto de prueba para los tres escenarios del día 2
     r["entre sesiones"] = evaluar_flujo(modelo, matriz, x2, y2, cfg)["exactitud"]
     # verificación con el ensayo 1 de S2 (los mismos criterios que el motor)
     v = rasgos_de(*flujo(seg2, [0]), cfg)
@@ -80,6 +86,9 @@ def validar_participante(raiz: Path, p: int, s1: int, s2: int, cfg: ConfigProces
         matriz, modelo, v["env"], v["envv"], v["y"], v["rasgos"], v["etq"], v["tasa"]
     )
     r["verificacion"] = ver
+    r["verificacion_decisiones"] = evaluar_flujo(modelo, matriz, *flujo(seg2, [0]), cfg)[
+        "exactitud"
+    ]
     # adaptado: matriz de hoy (ensayo 1 de S2) y LDA con S1 + ese ensayo
     m_hoy, mod_ad = entrenar_desde([v, rasgos_de(*flujo(seg1, range(7)), cfg)])
     r["adaptado"] = evaluar_flujo(mod_ad, m_hoy, x2, y2, cfg)["exactitud"]
@@ -120,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {esc:<15} {r[esc]:.0%}")
         estado = "PASA" if v["ok"] else "NO PASA"
         print(
-            f"  verificación    {estado}: exactitud {v['exactitud']:.0%}, amplitud "
+            f"  verificación    {estado}: exactitud {v['exactitud']:.0%} por muestra, "
+            f"{r['verificacion_decisiones']:.0%} por decisión; amplitud "
             + " ".join(f"{x:.2f}" for x in v["razon_amplitud"])
         )
     if len(filas) > 1:
@@ -130,6 +140,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {esc:<15} {vals.mean():.0%} ({vals.std(ddof=1):.0%})")
         pasan = sum(f["verificacion"]["ok"] for f in filas.values())
         print(f"  la verificación pasó en {pasan} de {len(filas)} participantes")
+        ganancia = np.array([f["recalibrado"] - f["entre sesiones"] for f in filas.values()])
+        print(
+            "\nGanancia de recalibrar (pareada, mismos ensayos): "
+            + ", ".join(f"P{p} {g:+.0%}" for p, g in zip(filas, ganancia, strict=True))
+        )
+        print(
+            f"  mediana {np.median(ganancia):+.0%}; con n = {len(filas)} es descriptivo, "
+            "no inferencial"
+        )
     return 0 if filas else 2
 
 
