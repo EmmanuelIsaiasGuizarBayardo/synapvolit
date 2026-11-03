@@ -1,5 +1,7 @@
 # SynapVolit
 
+**Instalación paso a paso** (dependencias, dataset GRABMyo, validaciones y juego): [docs/instalacion.md](docs/instalacion.md).
+
 Motor de adquisición, procesamiento y decodificación de sEMG para aplicaciones de DUNNE.
 
 ## Estructura
